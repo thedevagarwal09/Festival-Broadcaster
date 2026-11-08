@@ -12,11 +12,16 @@ import { sleep } from '../utils/sleep';
 import type { SessionManager } from '../whatsapp/session-manager';
 import { PACING, randomBetween } from '../../src/lib/pacing';
 import { renderMessage } from '../../src/lib/spintax';
+import { describeQuietHours, isQuietNow, quietHoursEnd } from '../services/quietHours';
 import type { CampaignDTO, LogLevel } from '../../src/lib/types';
 
 /** Longest single sleep, so pause/abort/shutdown are noticed within a few seconds. */
 const SLEEP_SLICE_MS = 3_000;
 const DISCONNECTED_POLL_MS = 5_000;
+/** proto.WebMessageInfo.Status: 3 = DELIVERY_ACK, 4 = READ (5 = PLAYED). */
+const RECEIPT_DELIVERED = 3;
+const RECEIPT_READ = 4;
+const EARLY_RECEIPT_TTL_MS = 2 * 60_000;
 
 /**
  * One worker per WhatsApp session, strictly one message at a time.
@@ -31,6 +36,9 @@ export class Dispatcher {
   private readonly nextAllowedAt = new Map<string, number>();
   private readonly sentSinceCooldown = new Map<string, number>();
   private readonly waitingForConnection = new Set<string>();
+  /** Receipts that arrived before the sent message's id was saved. */
+  private readonly earlyReceipts = new Map<string, { status: number; at: number }>();
+  private readonly progressTimers = new Map<string, NodeJS.Timeout>();
   private stopped = false;
 
   constructor(private readonly sessions: SessionManager) {}
@@ -43,8 +51,11 @@ export class Dispatcher {
     });
     if (reset.count > 0) console.log(`[dispatcher] re-queued ${reset.count} interrupted message(s)`);
 
+    // Campaigns created before the scheduler existed used "RUNNING" for "sending".
+    await prisma.broadcastCampaign.updateMany({ where: { status: 'RUNNING' }, data: { status: 'PROCESSING' } });
+
     const running = await prisma.broadcastCampaign.findMany({
-      where: { status: 'RUNNING' },
+      where: { status: 'PROCESSING' },
       select: { sessionId: true },
       distinct: ['sessionId'],
     });
@@ -75,9 +86,10 @@ export class Dispatcher {
     this.stopped = true;
   }
 
+  /** Manual pause. Also stops a quiet-hours pause from auto-resuming. */
   async pause(sessionId: string, campaignId: string): Promise<CampaignDTO | null> {
     const res = await prisma.broadcastCampaign.updateMany({
-      where: { id: campaignId, sessionId, status: 'RUNNING' },
+      where: { id: campaignId, sessionId, status: { in: ['PROCESSING', 'QUIET_HOURS_PAUSED'] } },
       data: { status: 'PAUSED' },
     });
     if (res.count > 0) {
@@ -86,21 +98,55 @@ export class Dispatcher {
     return this.emitProgress(campaignId);
   }
 
+  /** Resume a paused campaign, or start a scheduled one now. Respects quiet hours. */
   async resume(sessionId: string, campaignId: string): Promise<CampaignDTO | null> {
+    const quiet = await isQuietNow();
+    const current = await prisma.broadcastCampaign.findFirst({
+      where: { id: campaignId, sessionId },
+      select: { status: true },
+    });
     const res = await prisma.broadcastCampaign.updateMany({
-      where: { id: campaignId, sessionId, status: 'PAUSED' },
-      data: { status: 'RUNNING' },
+      where: { id: campaignId, sessionId, status: { in: ['PAUSED', 'SCHEDULED'] } },
+      data: { status: quiet ? 'QUIET_HOURS_PAUSED' : 'PROCESSING' },
     });
     if (res.count > 0) {
-      this.log(sessionId, campaignId, 'info', 'Campaign resumed. Pacing rules still apply.');
-      this.kick(sessionId);
+      const verb = current?.status === 'SCHEDULED' ? 'Started now instead of at the scheduled time' : 'Campaign resumed';
+      this.log(
+        sessionId,
+        campaignId,
+        quiet ? 'warn' : 'info',
+        quiet
+          ? `${verb}, but it's quiet hours (${await describeQuietHours()}). Sending begins at ${await quietHoursEnd()}.`
+          : `${verb}. Pacing rules still apply.`,
+      );
+      if (!quiet) this.kick(sessionId);
     }
     return this.emitProgress(campaignId);
   }
 
+  /** Called by the scheduler and right before each send when quiet hours begin. */
+  async pauseForQuietHours(sessionId: string, campaignId: string): Promise<void> {
+    const res = await prisma.broadcastCampaign.updateMany({
+      where: { id: campaignId, status: 'PROCESSING' },
+      data: { status: 'QUIET_HOURS_PAUSED' },
+    });
+    if (res.count === 0) return;
+    this.log(
+      sessionId,
+      campaignId,
+      'warn',
+      `Quiet hours (${await describeQuietHours()}) — paused automatically. Resumes at ${await quietHoursEnd()}.`,
+    );
+    await this.emitProgress(campaignId);
+  }
+
   async abort(sessionId: string, campaignId: string): Promise<CampaignDTO | null> {
     const res = await prisma.broadcastCampaign.updateMany({
-      where: { id: campaignId, sessionId, status: { in: ['RUNNING', 'PAUSED'] } },
+      where: {
+        id: campaignId,
+        sessionId,
+        status: { in: ['SCHEDULED', 'PROCESSING', 'PAUSED', 'QUIET_HOURS_PAUSED'] },
+      },
       data: { status: 'ABORTED', completedAt: new Date() },
     });
     if (res.count > 0) {
@@ -115,13 +161,14 @@ export class Dispatcher {
 
   /** Used when a session is unlinked: nothing can be sent until the user pairs again. */
   async pauseAllForSession(sessionId: string, reason: string): Promise<void> {
+    const active = { in: ['PROCESSING', 'QUIET_HOURS_PAUSED'] };
     const running = await prisma.broadcastCampaign.findMany({
-      where: { sessionId, status: 'RUNNING' },
+      where: { sessionId, status: active },
       select: { id: true },
     });
     if (running.length === 0) return;
     await prisma.broadcastCampaign.updateMany({
-      where: { sessionId, status: 'RUNNING' },
+      where: { sessionId, status: active },
       data: { status: 'PAUSED' },
     });
     for (const { id } of running) {
@@ -159,11 +206,78 @@ export class Dispatcher {
     });
   }
 
+  // --- Delivery / read receipts ---------------------------------------------
+
+  /**
+   * WhatsApp message status updates for messages we sent (from Baileys `messages.update`):
+   * 3 = delivered to the phone, 4 = read, 5 = played (voice/video). Read only arrives when the
+   * recipient shares read receipts, so "Read" is a lower bound.
+   */
+  async handleReceipts(updates: Array<{ messageId: string; status: number }>): Promise<void> {
+    const touched = new Set<string>();
+    for (const u of updates) {
+      if (u.status < RECEIPT_DELIVERED) continue;
+      const campaignId = await this.applyReceipt(u.messageId, u.status);
+      if (campaignId) touched.add(campaignId);
+      else this.earlyReceipts.set(u.messageId, { status: u.status, at: Date.now() });
+    }
+    for (const id of touched) this.scheduleProgressEmit(id);
+    // Forget early receipts that never matched one of our messages (e.g. sent from the phone).
+    const cutoff = Date.now() - EARLY_RECEIPT_TTL_MS;
+    for (const [id, r] of this.earlyReceipts) if (r.at < cutoff) this.earlyReceipts.delete(id);
+  }
+
+  private async applyEarlyReceipt(messageId: string): Promise<void> {
+    const early = this.earlyReceipts.get(messageId);
+    if (!early) return;
+    this.earlyReceipts.delete(messageId);
+    const campaignId = await this.applyReceipt(messageId, early.status);
+    if (campaignId) this.scheduleProgressEmit(campaignId);
+  }
+
+  /** Record delivered/read once per message. Returns the campaign id, or null if it isn't ours (yet). */
+  private async applyReceipt(messageId: string, status: number): Promise<string | null> {
+    const item = await prisma.queueItem.findFirst({
+      where: { messageId },
+      select: { id: true, campaignId: true, deliveredAt: true, readAt: true },
+    });
+    if (!item) return null;
+    const now = new Date();
+    const markDelivered = !item.deliveredAt; // read implies delivered
+    const markRead = status >= RECEIPT_READ && !item.readAt;
+    if (!markDelivered && !markRead) return item.campaignId;
+    await prisma.$transaction([
+      prisma.queueItem.update({
+        where: { id: item.id },
+        data: { ...(markDelivered ? { deliveredAt: now } : {}), ...(markRead ? { readAt: now } : {}) },
+      }),
+      prisma.broadcastCampaign.update({
+        where: { id: item.campaignId },
+        data: {
+          ...(markDelivered ? { deliveredCount: { increment: 1 } } : {}),
+          ...(markRead ? { readCount: { increment: 1 } } : {}),
+        },
+      }),
+    ]);
+    return item.campaignId;
+  }
+
+  /** Receipts arrive in bursts; push at most one progress update per campaign per second. */
+  private scheduleProgressEmit(campaignId: string): void {
+    if (this.progressTimers.has(campaignId)) return;
+    const timer = setTimeout(() => {
+      this.progressTimers.delete(campaignId);
+      this.emitProgress(campaignId).catch(() => undefined);
+    }, 1_000);
+    timer.unref();
+    this.progressTimers.set(campaignId, timer);
+  }
+
   // ---------------------------------------------------------------------------
 
   private async hasRunnableWork(sessionId: string): Promise<boolean> {
     if (this.stopped) return false;
-    const count = await prisma.broadcastCampaign.count({ where: { sessionId, status: 'RUNNING' } });
+    const count = await prisma.broadcastCampaign.count({ where: { sessionId, status: 'PROCESSING' } });
     return count > 0;
   }
 
@@ -171,7 +285,7 @@ export class Dispatcher {
     while (!this.stopped) {
       // Oldest running campaign first; campaigns for one account never run in parallel.
       const campaign = await prisma.broadcastCampaign.findFirst({
-        where: { sessionId, status: 'RUNNING' },
+        where: { sessionId, status: 'PROCESSING' },
         orderBy: { createdAt: 'asc' },
       });
       if (!campaign) return;
@@ -205,6 +319,12 @@ export class Dispatcher {
         continue;
       }
 
+      // Never send during quiet hours, even between scheduler ticks (e.g. at 23:00:30).
+      if (await isQuietNow()) {
+        await this.pauseForQuietHours(sessionId, campaign.id);
+        continue;
+      }
+
       // Claim the item atomically so it can never be sent twice by this process.
       const claimed = await prisma.queueItem.updateMany({
         where: { id: item.id, status: 'PENDING' },
@@ -216,7 +336,7 @@ export class Dispatcher {
         where: { id: campaign.id },
         select: { status: true },
       });
-      if (current?.status !== 'RUNNING') {
+      if (current?.status !== 'PROCESSING') {
         const aborted = current?.status === 'ABORTED';
         await prisma.queueItem.update({
           where: { id: item.id },
@@ -248,19 +368,23 @@ export class Dispatcher {
     this.log(sessionId, campaign.id, 'processing', 'Typing…', item);
 
     try {
-      await this.deliver(sock, item.recipientJid, text, campaign);
+      const messageId = await this.deliver(sock, item.recipientJid, text, campaign);
+      const now = new Date();
       await prisma.$transaction([
         prisma.queueItem.update({
           where: { id: item.id },
-          data: { status: 'SENT', processedAt: new Date(), renderedMessage: text, error: null },
+          data: { status: 'SENT', processedAt: now, renderedMessage: text, error: null, messageId },
         }),
         prisma.broadcastCampaign.update({
           where: { id: campaign.id },
-          data: { sentCount: { increment: 1 } },
+          data: { sentCount: { increment: 1 }, lastDispatchAt: now },
         }),
+        prisma.broadcastCampaign.updateMany({ where: { id: campaign.id, startedAt: null }, data: { startedAt: now } }),
       ]);
+      // A delivery receipt can beat our database write; apply any that arrived early.
+      if (messageId) await this.applyEarlyReceipt(messageId);
       const delay = this.scheduleNext(sessionId, campaign.id);
-      this.log(sessionId, campaign.id, 'sent', `Delivered · next in ${Math.round(delay / 1000)}s`, item);
+      this.log(sessionId, campaign.id, 'sent', `Sent · next in ${Math.round(delay / 1000)}s`, item);
     } catch (err) {
       const reason = errorMessage(err);
       if (!this.sessions.getConnectedSocket(sessionId)) {
@@ -270,15 +394,17 @@ export class Dispatcher {
         this.log(sessionId, campaign.id, 'warn', `Connection lost while sending (${reason}). Will retry.`, item);
         return;
       }
+      const now = new Date();
       await prisma.$transaction([
         prisma.queueItem.update({
           where: { id: item.id },
-          data: { status: 'FAILED', processedAt: new Date(), renderedMessage: text, error: reason },
+          data: { status: 'FAILED', processedAt: now, renderedMessage: text, error: reason },
         }),
         prisma.broadcastCampaign.update({
           where: { id: campaign.id },
-          data: { failedCount: { increment: 1 } },
+          data: { failedCount: { increment: 1 }, lastDispatchAt: now },
         }),
+        prisma.broadcastCampaign.updateMany({ where: { id: campaign.id, startedAt: null }, data: { startedAt: now } }),
       ]);
       const delay = this.scheduleNext(sessionId, campaign.id);
       this.log(sessionId, campaign.id, 'failed', `${reason} · next in ${Math.round(delay / 1000)}s`, item);
@@ -292,7 +418,7 @@ export class Dispatcher {
     jid: string,
     text: string,
     campaign: BroadcastCampaign,
-  ): Promise<void> {
+  ): Promise<string | null> {
     let mediaFile: string | null = null;
     if (campaign.mediaPath) {
       mediaFile = path.resolve(process.cwd(), campaign.mediaPath);
@@ -319,6 +445,7 @@ export class Dispatcher {
 
     const sent = await sock.sendMessage(jid, content);
     if (!sent) throw new Error('WhatsApp did not acknowledge the message');
+    return sent.key.id ?? null;
   }
 
   /** Decide the gap before the next message: random jitter, or a cooldown every N messages. */
@@ -344,7 +471,7 @@ export class Dispatcher {
 
   private async complete(campaign: BroadcastCampaign): Promise<void> {
     const res = await prisma.broadcastCampaign.updateMany({
-      where: { id: campaign.id, status: 'RUNNING' },
+      where: { id: campaign.id, status: 'PROCESSING' },
       data: { status: 'COMPLETED', completedAt: new Date() },
     });
     if (res.count === 0) return;

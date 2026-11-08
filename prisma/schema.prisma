@@ -32,6 +32,7 @@ model UserSession {
   contacts  Contact[]
   groups    ContactGroup[]
   campaigns BroadcastCampaign[]
+  draft     Draft?
 }
 
 model Contact {
@@ -81,11 +82,22 @@ model BroadcastCampaign {
   mediaPath       String?
   /// image | video
   mediaType       String?
-  /// RUNNING | PAUSED | COMPLETED | ABORTED
-  status          String    @default("RUNNING")
+  /// Compressed attachment size in bytes, and video length in seconds
+  mediaSize       Int?
+  mediaDuration   Float?
+  /// SCHEDULED | PROCESSING | PAUSED | QUIET_HOURS_PAUSED | COMPLETED | ABORTED
+  status          String    @default("PROCESSING")
+  /// When a SCHEDULED campaign should start (null = started immediately)
+  scheduledAt     DateTime?
   totalRecipients Int
   sentCount       Int       @default(0)
   failedCount     Int       @default(0)
+  /// From WhatsApp receipts: reached the phone / opened (read only if the recipient shares read receipts)
+  deliveredCount  Int       @default(0)
+  readCount       Int       @default(0)
+  /// First and latest dispatch, used for the real average gap between messages (ETA)
+  startedAt       DateTime?
+  lastDispatchAt  DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   completedAt     DateTime?
@@ -108,6 +120,10 @@ model QueueItem {
   /// PENDING | PROCESSING | SENT | FAILED | CANCELLED
   status          String    @default("PENDING")
   error           String?
+  /// WhatsApp message id, used to match delivery/read receipts
+  messageId       String?
+  deliveredAt     DateTime?
+  readAt          DateTime?
   /// Estimated dispatch time computed when the campaign was queued
   scheduledAt     DateTime  @default(now())
   processedAt     DateTime?
@@ -117,4 +133,20 @@ model QueueItem {
   campaign BroadcastCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
   @@index([campaignId, status, position])
+  @@index([messageId])
+}
+
+/// The composer's unsent work, saved as you type so a reload never loses it (one per session).
+model Draft {
+  sessionId       String    @id
+  groupId         String?
+  name            String    @default("")
+  messageTemplate String    @default("")
+  /// JSON MediaInfo of the compressed attachment (see src/lib/types.ts)
+  media           String?
+  /// Chosen start time when "Schedule" is selected
+  scheduledAt     DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  session UserSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 }

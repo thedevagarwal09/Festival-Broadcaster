@@ -7,7 +7,8 @@ import { Dispatcher } from './queue/dispatcher';
 import { setIO, type IOServer } from './realtime';
 import { createApiRouter } from './routes/api';
 import { registerSocketHandlers } from './socket-handlers';
-import { UPLOAD_DIR } from './upload';
+import { cleanIncoming, UPLOAD_DIR } from './upload';
+import { Scheduler } from './services/scheduler';
 import { isSameOrigin } from './utils/origin';
 import { SessionManager } from './whatsapp/session-manager';
 
@@ -40,6 +41,10 @@ async function main(): Promise<void> {
   const sessions = new SessionManager();
   const dispatcher = new Dispatcher(sessions);
   sessions.onConnected((sessionId) => dispatcher.kick(sessionId));
+  sessions.onMessageStatus((_sessionId, receipts) => {
+    dispatcher.handleReceipts(receipts).catch((err: unknown) => console.error('[dispatcher] receipts failed:', err));
+  });
+  const scheduler = new Scheduler(dispatcher);
   sessions.onLoggedOut((sessionId) => {
     dispatcher
       .pauseAllForSession(sessionId, 'the WhatsApp account was unlinked')
@@ -58,7 +63,7 @@ async function main(): Promise<void> {
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
   });
-  app.use('/api', createApiRouter({ sessions, dispatcher }));
+  app.use('/api', createApiRouter({ sessions, dispatcher, onQuietHoursChanged: () => void scheduler.tick() }));
   app.use('/uploads', express.static(UPLOAD_DIR, { fallthrough: false, index: false }));
   app.all('*', (req, res) => {
     void handleNext(req, res);
@@ -72,8 +77,10 @@ async function main(): Promise<void> {
 
   registerSocketHandlers(io, sessions);
 
+  await cleanIncoming();
   await dispatcher.recover();
   await sessions.restoreSessions();
+  scheduler.start();
 
   httpServer.listen(port, host, () => {
     console.log(`\n🪔  Festival Broadcaster ready on http://localhost:${port}  (${dev ? 'dev' : 'production'})\n`);
@@ -84,6 +91,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n[server] ${signal} received, shutting down…`);
+    await scheduler.stop();
     dispatcher.stop();
     await sessions.shutdown();
     io.close();

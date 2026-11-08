@@ -1,16 +1,22 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Clock, Loader2, Rocket, ShieldAlert, X } from 'lucide-react';
+import { AlertTriangle, CalendarClock, Clock, Loader2, Moon, Rocket, ShieldAlert, X } from 'lucide-react';
+import { formatBytes } from '@/lib/format';
 import { PACING, estimateDurationMs, formatDuration } from '@/lib/pacing';
+import { describeWindow } from '@/lib/quiet-hours';
+import type { MediaInfo, QuietHoursSettings } from '@/lib/types';
 
 interface SummaryModalProps {
   open: boolean;
   groupName: string;
   recipients: number;
   variations: number;
-  hasMedia: boolean;
-  mediaKind: 'image' | 'video';
+  media: MediaInfo | null;
+  /** Scheduled start, or null to start right away. */
+  startAt: Date | null;
+  /** Set when the run overlaps quiet hours. */
+  quietHours: QuietHoursSettings | null;
   preview: string;
   submitting: boolean;
   error: string | null;
@@ -46,8 +52,9 @@ export function SummaryModal({
   groupName,
   recipients,
   variations,
-  hasMedia,
-  mediaKind,
+  media,
+  startAt,
+  quietHours,
   preview,
   submitting,
   error,
@@ -74,7 +81,12 @@ export function SummaryModal({
   const avg = estimateDurationMs(recipients, 'avg');
   const min = estimateDurationMs(recipients, 'min');
   const max = estimateDurationMs(recipients, 'max');
-  const finishAt = new Date(Date.now() + avg).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const start = startAt ?? new Date();
+  const finishAt = new Date(start.getTime() + avg).toLocaleString([], {
+    ...(startAt ? { weekday: 'short' } : {}),
+    hour: '2-digit',
+    minute: '2-digit',
+  });
   const cooldowns = Math.floor(Math.max(0, recipients - 1) / PACING.cooldownEvery);
   const risk = riskLevel(recipients);
 
@@ -89,12 +101,18 @@ export function SummaryModal({
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h2 id="summary-title" className="text-lg font-bold text-stone-900">
-              Ready to broadcast?
+              {startAt ? 'Schedule this broadcast?' : 'Ready to broadcast?'}
             </h2>
             <p className="text-sm text-stone-500">
               “{groupName}” · {recipients} recipient{recipients === 1 ? '' : 's'}
-              {hasMedia ? ` · with ${mediaKind}` : ''}
+              {media ? ` · with ${media.mediaType} (${formatBytes(media.size)})` : ''}
             </p>
+            {startAt && (
+              <p className="mt-1 flex items-center gap-1.5 text-sm font-medium text-diya-700">
+                <CalendarClock className="h-4 w-4" />
+                Starts {startAt.toLocaleString([], { dateStyle: 'full', timeStyle: 'short' })}
+              </p>
+            )}
           </div>
           <button type="button" className="btn-ghost p-1.5" onClick={onCancel} disabled={submitting}>
             <X className="h-4 w-4" />
@@ -138,6 +156,14 @@ export function SummaryModal({
             {variations === 1 ? '' : 's'}
           </li>
         </ul>
+
+        {quietHours && (
+          <p className="mt-4 flex items-start gap-2 rounded-xl bg-sky-50 p-3 text-xs text-sky-800">
+            <Moon className="mt-0.5 h-4 w-4 shrink-0" />
+            This run overlaps quiet hours ({describeWindow(quietHours)}). Sending pauses automatically and continues
+            at {quietHours.end}, so it will finish later than shown above.
+          </p>
+        )}
 
         <div className={`mt-4 rounded-xl p-4 text-sm ring-1 ${risk.tone}`}>
           <p className="flex items-center gap-2 font-semibold">
@@ -185,7 +211,7 @@ export function SummaryModal({
           </button>
           <button type="button" className="btn-primary" onClick={onConfirm} disabled={!acknowledged || submitting}>
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
-            Start broadcast
+            {startAt ? 'Schedule broadcast' : 'Start broadcast'}
           </button>
         </div>
       </div>

@@ -60,6 +60,7 @@ interface ManagedSession {
 }
 
 type SessionListener = (sessionId: string) => void;
+type MessageStatusListener = (sessionId: string, updates: Array<{ messageId: string; status: number }>) => void;
 
 function cleanString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -79,6 +80,7 @@ export class SessionManager {
   private readonly sessions = new Map<string, ManagedSession>();
   private readonly connectedListeners: SessionListener[] = [];
   private readonly loggedOutListeners: SessionListener[] = [];
+  private readonly statusListeners: MessageStatusListener[] = [];
   private readonly contactSyncChains = new Map<string, Promise<void>>();
   private readonly addressBookSyncs = new Map<string, Promise<ContactSyncState>>();
   private versionPromise: Promise<WAVersion | undefined> | null = null;
@@ -90,6 +92,11 @@ export class SessionManager {
 
   onLoggedOut(listener: SessionListener): void {
     this.loggedOutListeners.push(listener);
+  }
+
+  /** Delivery/read status changes for messages this account sent. */
+  onMessageStatus(listener: MessageStatusListener): void {
+    this.statusListeners.push(listener);
   }
 
   snapshot(sessionId: string): SessionSnapshot {
@@ -267,6 +274,13 @@ export class SessionManager {
         );
       });
       sock.ev.on('contacts.upsert', (contacts) => this.queueContactSync(s.id, contacts));
+      // Delivery (3) / read (4) / played (5) receipts for messages we sent.
+      sock.ev.on('messages.update', (updates) => {
+        const receipts = updates
+          .filter((u) => u.key.fromMe && u.key.id && typeof u.update.status === 'number')
+          .map((u) => ({ messageId: u.key.id as string, status: u.update.status as number }));
+        if (receipts.length > 0) for (const listener of this.statusListeners) listener(s.id, receipts);
+      });
       sock.ev.on('contacts.update', (contacts) => this.queueContactSync(s.id, contacts));
       // Only PUSH_NAME history reaches this (see shouldSyncHistoryMessage): contacts, no chats/messages.
       sock.ev.on('messaging-history.set', ({ contacts }) => this.queueContactSync(s.id, contacts));

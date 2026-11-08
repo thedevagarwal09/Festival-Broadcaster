@@ -9,6 +9,13 @@ import type {
 
 type CampaignWithGroup = BroadcastCampaign & { group?: { name: string } | null };
 
+/** Real average time between dispatches so far (includes cooldown breaks), or null if too early to tell. */
+function averageInterval(c: BroadcastCampaign): number | null {
+  const processed = c.sentCount + c.failedCount;
+  if (!c.startedAt || !c.lastDispatchAt || processed < 2) return null;
+  return Math.round((c.lastDispatchAt.getTime() - c.startedAt.getTime()) / (processed - 1));
+}
+
 export function toCampaignDTO(c: CampaignWithGroup): CampaignDTO {
   return {
     id: c.id,
@@ -19,10 +26,18 @@ export function toCampaignDTO(c: CampaignWithGroup): CampaignDTO {
     messageTemplate: c.messageTemplate,
     mediaPath: c.mediaPath,
     mediaType: c.mediaType === 'image' || c.mediaType === 'video' ? (c.mediaType as MediaType) : null,
-    status: c.status as CampaignStatus,
+    mediaSize: c.mediaSize,
+    mediaDuration: c.mediaDuration,
+    status: (c.status === 'RUNNING' ? 'PROCESSING' : c.status) as CampaignStatus,
+    scheduledAt: c.scheduledAt ? c.scheduledAt.toISOString() : null,
     totalRecipients: c.totalRecipients,
     sentCount: c.sentCount,
     failedCount: c.failedCount,
+    deliveredCount: c.deliveredCount,
+    readCount: c.readCount,
+    startedAt: c.startedAt ? c.startedAt.toISOString() : null,
+    lastDispatchAt: c.lastDispatchAt ? c.lastDispatchAt.toISOString() : null,
+    avgIntervalMs: averageInterval(c),
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
     completedAt: c.completedAt ? c.completedAt.toISOString() : null,
@@ -36,7 +51,7 @@ export function queueItemToLog(item: QueueItem): CampaignLogEntry {
   switch (item.status) {
     case 'SENT':
       level = 'sent';
-      message = 'Delivered';
+      message = item.readAt ? 'Sent · read' : item.deliveredAt ? 'Sent · delivered' : 'Sent';
       break;
     case 'FAILED':
       level = 'failed';

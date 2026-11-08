@@ -151,7 +151,7 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
   };
 
   const connected = snapshot.status === 'connected' && socketConnected;
-  const runningCount = campaigns.filter((c) => c.status === 'RUNNING').length;
+  const runningCount = campaigns.filter((c) => c.status === 'PROCESSING').length;
 
   return (
     <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 p-4 md:p-8">

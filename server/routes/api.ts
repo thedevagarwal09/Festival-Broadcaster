@@ -10,7 +10,24 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import type { Dispatcher } from '../queue/dispatcher';
 import { queueItemToLog, toCampaignDTO } from '../serializers';
-import { ALLOWED_MEDIA, removeUpload, upload } from '../upload';
+import { removeUpload, upload } from '../upload';
+import { detectMediaKind, IMAGE_MAX_INPUT_BYTES } from '../services/mediaCompressor';
+import {
+  deleteMediaFile,
+  getMediaJob,
+  isMediaFileName,
+  mediaFilePath,
+  readMediaInfo,
+  startMediaJob,
+} from '../services/mediaJobs';
+import {
+  describeQuietHours,
+  getQuietHoursSettings,
+  isQuietNow,
+  quietHoursEnd,
+  saveQuietHours,
+  serverTimeZone,
+} from '../services/quietHours';
 import { HttpError, errorMessage } from '../utils/errors';
 import type { SessionManager } from '../whatsapp/session-manager';
 import { estimateDurationMs } from '../../src/lib/pacing';
@@ -19,6 +36,7 @@ import {
   isValidSessionId,
   type CampaignDetailResponse,
   type ContactDTO,
+  type DraftDTO,
   type GroupDTO,
 } from '../../src/lib/types';
 
@@ -81,8 +99,13 @@ function toGroupDTO(group: {
   };
 }
 
-export function createApiRouter(deps: { sessions: SessionManager; dispatcher: Dispatcher }): express.Router {
-  const { sessions, dispatcher } = deps;
+export function createApiRouter(deps: {
+  sessions: SessionManager;
+  dispatcher: Dispatcher;
+  /** Called after quiet hours are edited, so the change takes effect immediately. */
+  onQuietHoursChanged?: () => void;
+}): express.Router {
+  const { sessions, dispatcher, onQuietHoursChanged } = deps;
   const router = express.Router();
   router.use(express.json({ limit: '2mb' }));
 
@@ -296,89 +319,219 @@ export function createApiRouter(deps: { sessions: SessionManager; dispatcher: Di
     }),
   );
 
+  /**
+   * Create a campaign. Body (JSON): { groupId, messageTemplate, name?, mediaFile?, scheduledAt? }.
+   * mediaFile must be a file produced by the compression pipeline (POST /media).
+   * scheduledAt in the future → SCHEDULED; otherwise it starts now (or waits if it's quiet hours).
+   */
   router.post(
     '/sessions/:sessionId/campaigns',
-    upload.single('media'),
     ah(async (req, res) => {
       const { sessionId } = req.params;
-      const file = req.file;
-      try {
-        const body = (req.body ?? {}) as Record<string, unknown>;
-        const groupId = readString(body.groupId);
-        const messageTemplate = typeof body.messageTemplate === 'string' ? body.messageTemplate.trim() : '';
-        const requestedName = readString(body.name);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const groupId = readString(body.groupId);
+      const messageTemplate = typeof body.messageTemplate === 'string' ? body.messageTemplate.trim() : '';
+      const requestedName = readString(body.name);
 
-        if (!messageTemplate && !file) throw new HttpError(400, 'Write a message or attach an image/video.');
-        if (messageTemplate.length > MAX_TEMPLATE_LENGTH) {
-          throw new HttpError(400, `Message must be ${MAX_TEMPLATE_LENGTH} characters or fewer.`);
-        }
-        const templateError = validateTemplate(messageTemplate);
-        if (templateError) throw new HttpError(400, `Spintax error: ${templateError}`);
-
-        if (file) {
-          const rule = ALLOWED_MEDIA.get(file.mimetype);
-          if (!rule) throw new HttpError(400, 'Unsupported attachment type.');
-          if (file.size > rule.maxBytes) {
-            throw new HttpError(400, `Attachment is too large (max ${Math.round(rule.maxBytes / 1024 / 1024)} MB).`);
-          }
-        }
-
-        await prisma.userSession.upsert({ where: { id: sessionId }, create: { id: sessionId }, update: {} });
-        const group = await prisma.contactGroup.findFirst({
-          where: { id: groupId, sessionId },
-          include: { contacts: { orderBy: [{ name: 'asc' }, { phone: 'asc' }] } },
-        });
-        if (!group) throw new HttpError(404, 'Pick a contact group to broadcast to.');
-
-        const recipients = [...new Map(group.contacts.map((c) => [c.jid, c])).values()];
-        if (recipients.length === 0) throw new HttpError(400, 'That group has no contacts.');
-
-        const now = Date.now();
-        const mediaType = file ? (file.mimetype.startsWith('video/') ? 'video' : 'image') : null;
-        const mediaPath = file ? path.relative(process.cwd(), file.path) : null;
-        const name =
-          requestedName.slice(0, 120) ||
-          `${group.name} · ${new Date(now).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}`;
-
-        const campaign = await prisma.$transaction(async (tx) => {
-          const created = await tx.broadcastCampaign.create({
-            data: {
-              sessionId,
-              groupId: group.id,
-              name,
-              messageTemplate,
-              mediaPath,
-              mediaType,
-              status: 'RUNNING',
-              totalRecipients: recipients.length,
-            },
-            include: { group: { select: { name: true } } },
-          });
-          await tx.queueItem.createMany({
-            data: recipients.map((contact, position) => ({
-              campaignId: created.id,
-              position,
-              recipientJid: contact.jid,
-              recipientName: contact.name ?? contact.pushName ?? null,
-              status: 'PENDING',
-              scheduledAt: new Date(now + estimateDurationMs(position)),
-            })),
-          });
-          return created;
-        });
-
-        dispatcher.log(
-          sessionId,
-          campaign.id,
-          'info',
-          `Campaign queued for ${recipients.length} recipient(s) in "${group.name}".`,
-        );
-        dispatcher.kick(sessionId);
-        res.status(201).json(toCampaignDTO(campaign));
-      } catch (err) {
-        await removeUpload(file?.path);
-        throw err;
+      const media = body.mediaFile ? await readMediaInfo(body.mediaFile) : null;
+      if (body.mediaFile && !media) {
+        throw new HttpError(400, 'The attachment is no longer available. Remove it and attach it again.');
       }
+      if (!messageTemplate && !media) throw new HttpError(400, 'Write a message or attach an image/video.');
+      if (messageTemplate.length > MAX_TEMPLATE_LENGTH) {
+        throw new HttpError(400, `Message must be ${MAX_TEMPLATE_LENGTH} characters or fewer.`);
+      }
+      const templateError = validateTemplate(messageTemplate);
+      if (templateError) throw new HttpError(400, `Spintax error: ${templateError}`);
+
+      let scheduledAt: Date | null = null;
+      if (body.scheduledAt) {
+        scheduledAt = new Date(String(body.scheduledAt));
+        if (Number.isNaN(scheduledAt.getTime())) throw new HttpError(400, 'The scheduled time is not a valid date.');
+        if (scheduledAt.getTime() > Date.now() + 366 * 24 * 3600_000) {
+          throw new HttpError(400, 'Schedule within the next year.');
+        }
+        if (scheduledAt.getTime() <= Date.now() + 30_000) scheduledAt = null; // in the past or now → send now
+      }
+
+      await prisma.userSession.upsert({ where: { id: sessionId }, create: { id: sessionId }, update: {} });
+      const group = await prisma.contactGroup.findFirst({
+        where: { id: groupId, sessionId },
+        include: { contacts: { orderBy: [{ name: 'asc' }, { phone: 'asc' }] } },
+      });
+      if (!group) throw new HttpError(404, 'Pick a contact group to broadcast to.');
+
+      const recipients = [...new Map(group.contacts.map((c) => [c.jid, c])).values()];
+      if (recipients.length === 0) throw new HttpError(400, 'That group has no contacts.');
+
+      const quiet = await isQuietNow();
+      const status = scheduledAt ? 'SCHEDULED' : quiet ? 'QUIET_HOURS_PAUSED' : 'PROCESSING';
+      const startMs = (scheduledAt ?? new Date()).getTime();
+      const name =
+        requestedName.slice(0, 120) ||
+        `${group.name} · ${new Date(startMs).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}`;
+
+      const campaign = await prisma.$transaction(async (tx) => {
+        const created = await tx.broadcastCampaign.create({
+          data: {
+            sessionId,
+            groupId: group.id,
+            name,
+            messageTemplate,
+            mediaPath: media ? path.relative(process.cwd(), mediaFilePath(media.file)) : null,
+            mediaType: media?.mediaType ?? null,
+            mediaSize: media?.size ?? null,
+            mediaDuration: media?.durationSec ?? null,
+            status,
+            scheduledAt,
+            totalRecipients: recipients.length,
+          },
+          include: { group: { select: { name: true } } },
+        });
+        await tx.queueItem.createMany({
+          data: recipients.map((contact, position) => ({
+            campaignId: created.id,
+            position,
+            recipientJid: contact.jid,
+            recipientName: contact.name ?? contact.pushName ?? null,
+            status: 'PENDING',
+            scheduledAt: new Date(startMs + estimateDurationMs(position)),
+          })),
+        });
+        // The draft has become a campaign.
+        await tx.draft.deleteMany({ where: { sessionId } });
+        return created;
+      });
+
+      const when = scheduledAt
+        ? `Scheduled for ${scheduledAt.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} (${serverTimeZone()}).`
+        : quiet
+          ? `It's quiet hours (${await describeQuietHours()}), so sending starts at ${await quietHoursEnd()}.`
+          : 'Sending now.';
+      dispatcher.log(sessionId, campaign.id, quiet && !scheduledAt ? 'warn' : 'info', `Campaign queued for ${recipients.length} recipient(s) in "${group.name}". ${when}`);
+      if (status === 'PROCESSING') dispatcher.kick(sessionId);
+      res.status(201).json(toCampaignDTO(campaign));
+    }),
+  );
+
+  // --- Media (compression pipeline) -----------------------------------------
+
+  /** Upload an original. Compression runs in the background; poll the job or listen for `media_job`. */
+  router.post(
+    '/sessions/:sessionId/media',
+    upload.single('media'),
+    ah(async (req, res) => {
+      const file = req.file;
+      if (!file) throw new HttpError(400, 'Choose a file to upload.');
+      const kind = detectMediaKind(file.mimetype, file.originalname);
+      if (!kind) {
+        await removeUpload(file.path);
+        throw new HttpError(400, 'Unsupported file type.');
+      }
+      if (kind === 'image' && file.size > IMAGE_MAX_INPUT_BYTES) {
+        await removeUpload(file.path);
+        throw new HttpError(400, 'Images can be up to 25 MB.');
+      }
+      const job = startMediaJob({
+        sessionId: req.params.sessionId,
+        uploadPath: file.path,
+        kind,
+        originalName: file.originalname.slice(0, 200),
+      });
+      res.status(202).json(job);
+    }),
+  );
+
+  router.get(
+    '/sessions/:sessionId/media/jobs/:jobId',
+    ah(async (req, res) => {
+      const job = getMediaJob(req.params.sessionId, req.params.jobId);
+      if (!job) throw new HttpError(404, 'That upload is no longer being tracked. Attach the file again.');
+      res.json(job);
+    }),
+  );
+
+  /** Delete a compressed file that was attached and then removed (kept if any campaign uses it). */
+  router.delete(
+    '/sessions/:sessionId/media/:file',
+    ah(async (req, res) => {
+      const { file } = req.params;
+      if (!isMediaFileName(file)) throw new HttpError(400, 'Not a media file.');
+      const inUse = await prisma.broadcastCampaign.count({ where: { mediaPath: { endsWith: file } } });
+      if (inUse === 0) await deleteMediaFile(file);
+      res.status(204).end();
+    }),
+  );
+
+  // --- Draft auto-save ---------------------------------------------------------
+
+  router.get(
+    '/sessions/:sessionId/draft',
+    ah(async (req, res) => {
+      const draft = await prisma.draft.findUnique({ where: { sessionId: req.params.sessionId } });
+      const media = draft?.media ? await readMediaInfo((JSON.parse(draft.media) as { file?: unknown }).file) : null;
+      const payload: DraftDTO = {
+        groupId: draft?.groupId ?? null,
+        name: draft?.name ?? '',
+        messageTemplate: draft?.messageTemplate ?? '',
+        media,
+        scheduledAt: draft?.scheduledAt ? draft.scheduledAt.toISOString() : null,
+        updatedAt: draft ? draft.updatedAt.toISOString() : null,
+      };
+      res.json(payload);
+    }),
+  );
+
+  router.put(
+    '/sessions/:sessionId/draft',
+    ah(async (req, res) => {
+      const { sessionId } = req.params;
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const template = typeof body.messageTemplate === 'string' ? body.messageTemplate.slice(0, MAX_TEMPLATE_LENGTH) : '';
+      const media = body.mediaFile ? await readMediaInfo(body.mediaFile) : null;
+      const scheduled = body.scheduledAt ? new Date(String(body.scheduledAt)) : null;
+      const data = {
+        groupId: readString(body.groupId) || null,
+        name: readString(body.name).slice(0, 120),
+        messageTemplate: template,
+        media: media ? JSON.stringify({ file: media.file }) : null,
+        scheduledAt: scheduled && !Number.isNaN(scheduled.getTime()) ? scheduled : null,
+      };
+      await prisma.userSession.upsert({ where: { id: sessionId }, create: { id: sessionId }, update: {} });
+      const saved = await prisma.draft.upsert({ where: { sessionId }, create: { sessionId, ...data }, update: data });
+      res.json({ updatedAt: saved.updatedAt.toISOString() });
+    }),
+  );
+
+  router.delete(
+    '/sessions/:sessionId/draft',
+    ah(async (req, res) => {
+      await prisma.draft.deleteMany({ where: { sessionId: req.params.sessionId } });
+      res.status(204).end();
+    }),
+  );
+
+  // --- Settings ----------------------------------------------------------------
+
+  router.get(
+    '/settings/quiet-hours',
+    ah(async (_req, res) => {
+      res.json(await getQuietHoursSettings());
+    }),
+  );
+
+  router.put(
+    '/settings/quiet-hours',
+    ah(async (req, res) => {
+      let saved;
+      try {
+        saved = await saveQuietHours(req.body);
+      } catch (err) {
+        throw new HttpError(400, errorMessage(err));
+      }
+      res.json(saved);
+      // Apply the new window right away instead of at the next minute tick.
+      onQuietHoursChanged?.();
     }),
   );
 
@@ -427,8 +580,12 @@ export function createApiRouter(deps: { sessions: SessionManager; dispatcher: Di
       return;
     }
     if (err instanceof multer.MulterError) {
-      const message = err.code === 'LIMIT_FILE_SIZE' ? 'Attachment is too large (max 64 MB).' : err.message;
+      const message = err.code === 'LIMIT_FILE_SIZE' ? 'That file is too large (videos up to 500 MB, images up to 25 MB).' : err.message;
       res.status(400).json({ error: message });
+      return;
+    }
+    if ((err as { type?: string } | null)?.type === 'entity.parse.failed') {
+      res.status(400).json({ error: 'Invalid JSON in the request body.' });
       return;
     }
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {

@@ -36,6 +36,10 @@ any paid service. The database is a local SQLite file, and the app needs no Redi
 │   ├── serializers.ts           # DB rows → DTOs
 │   ├── upload.ts                # multer storage in ./uploads
 │   ├── routes/api.ts            # REST API: contacts, groups, campaigns, pause/resume/abort
+│   ├── services/mediaCompressor.ts  # sharp + ffmpeg compression pipeline
+│   ├── services/mediaJobs.ts        # background compression jobs with live progress
+│   ├── services/scheduler.ts        # node-cron scheduler: scheduled starts, quiet hours
+│   ├── services/quietHours.ts       # quiet-hours settings and time-window maths
 │   ├── whatsapp/session-manager.ts  # Module A: Baileys sockets, QR stream, reconnect, contact sync
 │   ├── queue/dispatcher.ts      # Module C: SQLite-backed serial dispatcher with anti-ban pacing
 │   └── utils/                   # sleep, errors, jid helpers
@@ -92,8 +96,12 @@ Then open <http://localhost:3000>:
    save it. To reorganise, open a group, tick contacts and use *Move* (to another group), *Add*
    (also put them in another group) or *Remove*.
 4. **Compose.** Pick a group and write the message with spintax and `{{name}}`. You can attach an image or
-   video, then click *Review & send*.
-5. **Watch it run.** *Live Dispatch* shows the progress bar and the live log, with Pause, Resume and Abort.
+   video, which is compressed automatically (see below). Your draft is saved as you type, so a reload
+   or a different browser never loses it.
+5. **Send now or schedule.** Choose *Start right away* or *Schedule for later*, for example Diwali at
+   07:00. The server starts it on its own, so the browser can be closed.
+6. **Watch it run.** *Live Dispatch* shows the completion bar, Total targets / Dispatched / Delivered /
+   Read / Failed, a time-left estimate and the live log, with Pause, Resume and Abort.
 
 For a production build, run:
 
@@ -159,6 +167,51 @@ docker run --rm -v festival-broadcaster_festival-data:/data -v "$PWD":/backup bu
   use a VPN (WireGuard, Tailscale) or a reverse proxy that adds its own login.
 - **One WhatsApp account per instance.** If you also run the app on your laptop, unlink one of
   them, or each will keep its own separate contacts and campaigns.
+
+## Media compression
+
+Every attachment goes through a compression step before it can be queued, so WhatsApp never has to
+receive a huge upload once per recipient (which causes socket timeouts and "payload too large"
+errors). The code is in `server/services/mediaCompressor.ts`.
+
+| | Accepted | Output |
+|---|---|---|
+| **Images** (sharp) | JPEG, PNG, WebP up to 25 MB | JPEG, at most 1920×1080 (1080×1920 for portrait), quality 80→75, under 800 KB. EXIF/GPS metadata is removed after applying the photo's rotation, and transparency becomes white |
+| **Videos** (ffmpeg via `fluent-ffmpeg` + `@ffmpeg-installer/ffmpeg`) | MP4, MOV, MKV up to 500 MB | H.264 + AAC in MP4, at most 720p (short side) at ≤ 30 fps. Short clips use one CRF 25 pass with a bitrate cap. Longer clips use two passes at a bitrate computed for about 14 MB. Anything over 16 MB is re-encoded once at a lower bitrate. Clips too long to fit at watchable quality (about 5+ minutes) are refused with a clear message |
+
+Compression runs as a background job with live progress, so a slow video never hits a browser or
+proxy timeout. Videos are encoded one at a time to protect the server's CPU. The original upload is
+deleted once it's processed. If you use a reverse proxy, let it accept uploads of up to 500 MB (in
+Nginx Proxy Manager: *Advanced → `client_max_body_size 500m;`*).
+
+## Scheduling and quiet hours
+
+`server/services/scheduler.ts` runs every minute on the server (node-cron):
+
+```
+SCHEDULED ──start time reached──▶ PROCESSING ──▶ COMPLETED
+                                     │  ▲
+                 quiet hours begin   ▼  │  quiet hours end (e.g. 07:00)
+                              QUIET_HOURS_PAUSED
+PAUSED = paused by you (or WhatsApp unlinked); never resumed automatically.
+```
+
+- **Quiet hours** default to **23:00–07:00** in the server's time zone (`TZ`, Asia/Kolkata in Docker).
+  Change them on the Compose screen. Changes apply immediately.
+- The sender also checks quiet hours **right before each message**, so nothing goes out between
+  scheduler ticks.
+- A scheduled campaign whose start time falls inside quiet hours waits until they end.
+- *Start now* on a scheduled campaign skips the wait. *Hold* keeps a quiet-hours pause from
+  resuming on its own.
+
+## Analytics
+
+Delivered and Read come from WhatsApp receipts (`messages.update`: status 3 = delivered,
+4 = read). Read only counts recipients who share read receipts, so treat it as a minimum. Each
+queue item stores its WhatsApp message id. Receipts that arrive before the send is recorded are
+held briefly and applied afterwards. Time left uses the campaign's real average gap between
+messages (jitter and cooldowns included), falling back to the pacing settings until two messages
+have gone out.
 
 ## How it works
 

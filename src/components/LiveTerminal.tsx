@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
+  CalendarClock,
   CheckCircle2,
-  Clock,
   Info,
   Loader2,
+  Moon,
   Pause,
   Play,
   Radio,
@@ -15,7 +16,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { formatClock, formatDateTime, jidToPhone } from '@/lib/format';
+import { formatBytes, formatClock, formatDateTime, jidToPhone } from '@/lib/format';
 import { estimateDurationMs, formatDuration } from '@/lib/pacing';
 import { getSocket } from '@/lib/socket';
 import type { CampaignDTO, CampaignLogEntry, CampaignStatus, LogLevel } from '@/lib/types';
@@ -31,10 +32,21 @@ interface LiveTerminalProps {
 const MAX_LOG_LINES = 1000;
 
 const STATUS_STYLE: Record<CampaignStatus, string> = {
-  RUNNING: 'bg-emerald-50 text-emerald-700',
+  SCHEDULED: 'bg-violet-50 text-violet-700',
+  PROCESSING: 'bg-emerald-50 text-emerald-700',
   PAUSED: 'bg-amber-50 text-amber-700',
-  COMPLETED: 'bg-sky-50 text-sky-700',
+  QUIET_HOURS_PAUSED: 'bg-sky-50 text-sky-700',
+  COMPLETED: 'bg-stone-100 text-stone-700',
   ABORTED: 'bg-rose-50 text-rose-700',
+};
+
+const STATUS_LABEL: Record<CampaignStatus, string> = {
+  SCHEDULED: 'scheduled',
+  PROCESSING: 'sending',
+  PAUSED: 'paused',
+  QUIET_HOURS_PAUSED: 'quiet hours',
+  COMPLETED: 'completed',
+  ABORTED: 'aborted',
 };
 
 const LEVEL_STYLE: Record<LogLevel, { color: string; tag: string }> = {
@@ -166,12 +178,27 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
     );
   }
 
-  const processed = campaign ? campaign.sentCount + campaign.failedCount : 0;
   const total = campaign?.totalRecipients ?? 0;
-  const sentPct = total ? (campaign!.sentCount / total) * 100 : 0;
-  const failedPct = total ? (campaign!.failedCount / total) * 100 : 0;
-  const remaining = Math.max(0, total - processed);
-  const isActive = campaign?.status === 'RUNNING' || campaign?.status === 'PAUSED';
+  const sent = campaign?.sentCount ?? 0;
+  const failed = campaign?.failedCount ?? 0;
+  const delivered = Math.min(campaign?.deliveredCount ?? 0, sent);
+  const read = Math.min(campaign?.readCount ?? 0, delivered);
+  const processed = sent + failed;
+  const status = campaign?.status;
+  const isOpen = status === 'SCHEDULED' || status === 'PROCESSING' || status === 'PAUSED' || status === 'QUIET_HOURS_PAUSED';
+  const remaining = isOpen ? Math.max(0, total - processed) : 0;
+  const completionPct = total ? Math.round((processed / total) * 100) : 0;
+  const pct = (n: number) => (total ? `${(n / total) * 100}%` : '0%');
+
+  // ETA from the real average gap between messages so far (it includes the jitter and cooldown
+  // breaks). Clamped so a long pause (quiet hours, manual pause) doesn't distort it; falls back to
+  // the pacing settings until two messages have gone out.
+  const pacingPerMessage = remaining > 0 ? estimateDurationMs(remaining) / remaining : 0;
+  const observed = campaign?.avgIntervalMs ?? null;
+  const perMessage = observed
+    ? Math.min(Math.max(observed, pacingPerMessage * 0.5), pacingPerMessage * 2.5)
+    : pacingPerMessage;
+  const etaMs = remaining * perMessage;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
@@ -179,7 +206,7 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
         <h2 className="px-2 pb-2 pt-1 text-sm font-semibold text-stone-700">Campaigns</h2>
         <ul className="space-y-1">
           {campaigns.map((c) => {
-            const pct = c.totalRecipients ? Math.round(((c.sentCount + c.failedCount) / c.totalRecipients) * 100) : 0;
+            const done = c.totalRecipients ? Math.round(((c.sentCount + c.failedCount) / c.totalRecipients) * 100) : 0;
             return (
               <li key={c.id}>
                 <button
@@ -191,13 +218,15 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-sm font-medium text-stone-800">{c.name}</span>
-                    <span className={`chip shrink-0 ${STATUS_STYLE[c.status]}`}>{c.status.toLowerCase()}</span>
+                    <span className={`chip shrink-0 ${STATUS_STYLE[c.status]}`}>{STATUS_LABEL[c.status]}</span>
                   </div>
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-stone-100">
-                    <div className="h-full bg-diya-400" style={{ width: `${pct}%` }} />
+                    <div className="h-full bg-diya-400" style={{ width: `${done}%` }} />
                   </div>
                   <p className="mt-1 text-xs text-stone-500">
-                    {c.sentCount + c.failedCount}/{c.totalRecipients} · {formatDateTime(c.createdAt)}
+                    {c.status === 'SCHEDULED' && c.scheduledAt
+                      ? `Starts ${formatDateTime(c.scheduledAt)}`
+                      : `${c.sentCount + c.failedCount}/${c.totalRecipients} · ${formatDateTime(c.createdAt)}`}
                   </p>
                 </button>
               </li>
@@ -212,26 +241,40 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  {campaign.status === 'RUNNING' && <Radio className="h-4 w-4 animate-pulse text-emerald-500" />}
+                  {status === 'PROCESSING' && <Radio className="h-4 w-4 animate-pulse text-emerald-500" />}
+                  {status === 'QUIET_HOURS_PAUSED' && <Moon className="h-4 w-4 text-sky-500" />}
+                  {status === 'SCHEDULED' && <CalendarClock className="h-4 w-4 text-violet-500" />}
                   <h2 className="truncate text-lg font-bold text-stone-900">{campaign.name}</h2>
-                  <span className={`chip ${STATUS_STYLE[campaign.status]}`}>{campaign.status.toLowerCase()}</span>
+                  <span className={`chip ${STATUS_STYLE[campaign.status]}`}>{STATUS_LABEL[campaign.status]}</span>
                 </div>
                 <p className="mt-1 text-sm text-stone-500">
                   {campaign.groupName ? `Group “${campaign.groupName}”` : 'Group deleted'}
-                  {campaign.mediaType ? ` · with ${campaign.mediaType}` : ''} · started {formatDateTime(campaign.createdAt)}
+                  {campaign.mediaType
+                    ? ` · with ${campaign.mediaType}${campaign.mediaSize ? ` (${formatBytes(campaign.mediaSize)})` : ''}`
+                    : ''}
+                  {' · '}
+                  {status === 'SCHEDULED' && campaign.scheduledAt
+                    ? `starts ${formatDateTime(campaign.scheduledAt)}`
+                    : campaign.startedAt
+                      ? `started ${formatDateTime(campaign.startedAt)}`
+                      : `created ${formatDateTime(campaign.createdAt)}`}
                 </p>
+                {status === 'QUIET_HOURS_PAUSED' && (
+                  <p className="mt-2 text-sm text-sky-700">Paused for quiet hours — it resumes on its own when they end.</p>
+                )}
               </div>
-              {isActive && (
-                <div className="flex gap-2">
-                  {campaign.status === 'RUNNING' ? (
+              {isOpen && (
+                <div className="flex flex-wrap gap-2">
+                  {status === 'PROCESSING' || status === 'QUIET_HOURS_PAUSED' ? (
                     <button
                       type="button"
                       className="btn-secondary"
                       onClick={() => void control('pause')}
                       disabled={pendingAction !== null}
+                      title={status === 'QUIET_HOURS_PAUSED' ? 'Keep it paused after quiet hours end' : undefined}
                     >
                       {pendingAction === 'pause' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
-                      Pause
+                      {status === 'QUIET_HOURS_PAUSED' ? 'Hold' : 'Pause'}
                     </button>
                   ) : (
                     <button
@@ -241,7 +284,7 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
                       disabled={pendingAction !== null}
                     >
                       {pendingAction === 'resume' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                      Resume
+                      {status === 'SCHEDULED' ? 'Start now' : 'Resume'}
                     </button>
                   )}
                   <button
@@ -251,43 +294,66 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
                     disabled={pendingAction !== null}
                   >
                     {pendingAction === 'abort' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
-                    Abort
+                    {status === 'SCHEDULED' ? 'Cancel' : 'Abort'}
                   </button>
                 </div>
               )}
             </div>
 
+            {/* Analytics */}
             <div className="mt-5">
-              <div className="flex h-3 overflow-hidden rounded-full bg-stone-100">
-                <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${sentPct}%` }} />
-                <div className="h-full bg-rose-500 transition-all duration-500" style={{ width: `${failedPct}%` }} />
+              <div className="mb-1.5 flex items-baseline justify-between text-sm">
+                <span className="font-semibold text-stone-800">{completionPct}% complete</span>
+                <span className="text-xs text-stone-500" aria-live="polite">
+                  {isOpen && status !== 'SCHEDULED' && remaining === 0
+                    ? 'All messages processed — finishing up'
+                    : status === 'PROCESSING' && remaining > 0
+                    ? `~${formatDuration(etaMs)} left · ${observed ? `avg ${(perMessage / 1000).toFixed(1)} s per message so far` : 'estimated from pacing settings'}`
+                    : status === 'SCHEDULED'
+                      ? `~${formatDuration(etaMs)} once it starts`
+                      : status === 'PAUSED'
+                        ? 'Paused'
+                        : status === 'QUIET_HOURS_PAUSED'
+                          ? `~${formatDuration(etaMs)} of sending left after quiet hours`
+                          : status === 'COMPLETED'
+                            ? `Finished ${campaign.completedAt ? formatDateTime(campaign.completedAt) : ''}`
+                            : ''}
+                </span>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                <div>
-                  <p className="text-xs text-stone-500">Sent</p>
-                  <p className="text-xl font-bold text-emerald-600">{campaign.sentCount}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-stone-500">Failed</p>
-                  <p className="text-xl font-bold text-rose-600">{campaign.failedCount}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-stone-500">Remaining</p>
-                  <p className="text-xl font-bold text-stone-800">{isActive ? remaining : 0}</p>
-                </div>
-                <div>
-                  <p className="flex items-center gap-1 text-xs text-stone-500">
-                    <Clock className="h-3 w-3" /> Time left
-                  </p>
-                  <p className="text-xl font-bold text-stone-800">
-                    {campaign.status === 'RUNNING' && remaining > 0
-                      ? `~${formatDuration(estimateDurationMs(remaining))}`
-                      : campaign.status === 'PAUSED'
-                        ? 'paused'
-                        : '—'}
-                  </p>
-                </div>
+              <div
+                className="flex h-3 overflow-hidden rounded-full bg-stone-100"
+                role="progressbar"
+                aria-valuenow={completionPct}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Campaign completion"
+              >
+                <div className="h-full bg-emerald-700 transition-all duration-500" style={{ width: pct(read) }} title="Read" />
+                <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: pct(delivered - read) }} title="Delivered" />
+                <div className="h-full bg-emerald-300 transition-all duration-500" style={{ width: pct(sent - delivered) }} title="Dispatched" />
+                <div className="h-full bg-rose-500 transition-all duration-500" style={{ width: pct(failed) }} title="Failed" />
               </div>
+
+              <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+                {[
+                  { label: 'Total targets', value: total, sub: `${remaining} to go`, tone: 'text-stone-800', dot: 'bg-stone-300' },
+                  { label: 'Dispatched', value: sent, sub: total ? `${Math.round((sent / total) * 100)}% of targets` : '', tone: 'text-emerald-600', dot: 'bg-emerald-300' },
+                  { label: 'Delivered', value: delivered, sub: sent ? `${Math.round((delivered / sent) * 100)}% of dispatched` : '—', tone: 'text-emerald-700', dot: 'bg-emerald-500' },
+                  { label: 'Read', value: read, sub: sent ? `${Math.round((read / sent) * 100)}% of dispatched` : '—', tone: 'text-emerald-800', dot: 'bg-emerald-700' },
+                  { label: 'Failed', value: failed, sub: total ? `${Math.round((failed / total) * 100)}% of targets` : '', tone: 'text-rose-600', dot: 'bg-rose-500' },
+                ].map((m) => (
+                  <div key={m.label} className="rounded-xl bg-stone-50 px-3 py-2.5">
+                    <dt className="flex items-center gap-1.5 text-xs text-stone-500">
+                      <span className={`h-2 w-2 rounded-full ${m.dot}`} /> {m.label}
+                    </dt>
+                    <dd className={`text-2xl font-bold tabular-nums ${m.tone}`}>{m.value.toLocaleString()}</dd>
+                    <dd className="text-[11px] text-stone-400">{m.sub}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="mt-2 text-[11px] text-stone-400">
+                Delivered and Read come from WhatsApp receipts. Read only counts people who share read receipts.
+              </p>
             </div>
             {error && <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
           </div>

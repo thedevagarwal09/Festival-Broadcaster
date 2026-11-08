@@ -1,13 +1,17 @@
 'use client';
 
 /* eslint-disable @next/next/no-img-element */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bold,
+  CalendarClock,
+  Check,
   Clock,
   Image as ImageIcon,
   Italic,
+  Loader2,
+  Moon,
   Paperclip,
   Send,
   Shuffle,
@@ -18,11 +22,13 @@ import {
   X,
 } from 'lucide-react';
 import { SummaryModal } from './SummaryModal';
-import { api } from '@/lib/api';
-import { contactDisplayName, formatBytes } from '@/lib/format';
+import { api, uploadMedia } from '@/lib/api';
+import { contactDisplayName, formatBytes, formatRelative } from '@/lib/format';
 import { estimateDurationMs, formatDuration } from '@/lib/pacing';
+import { describeWindow, runTouchesQuietHours, toLocalInputValue } from '@/lib/quiet-hours';
+import { getSocket } from '@/lib/socket';
 import { TEMPLATE_VARIABLES, countVariations, renderMessage, validateTemplate } from '@/lib/spintax';
-import type { CampaignDTO, ContactDTO, GroupDTO } from '@/lib/types';
+import type { CampaignDTO, ContactDTO, GroupDTO, MediaInfo, MediaJob, QuietHoursSettings } from '@/lib/types';
 
 interface BroadcastComposerProps {
   sessionId: string;
@@ -40,10 +46,12 @@ const DEFAULT_TEMPLATE = `{Happy Diwali|Wishing you a joyful Diwali|Warm Diwali 
 {With love|Warm regards|Best wishes} 🙏`;
 
 const MAX_TEMPLATE = 4096;
-const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-const VIDEO_TYPES = ['video/mp4', 'video/3gpp'];
-const IMAGE_MAX = 16 * 1024 * 1024;
-const VIDEO_MAX = 64 * 1024 * 1024;
+const IMAGE_EXT = /\.(jpe?g|png|webp)$/i;
+const VIDEO_EXT = /\.(mp4|mov|mkv)$/i;
+const IMAGE_MAX = 25 * 1024 * 1024;
+const VIDEO_MAX = 500 * 1024 * 1024;
+const ACCEPT = 'image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/x-matroska,.mkv,.mov';
+const DRAFT_SAVE_DELAY_MS = 800;
 const EMOJIS = ['🪔', '✨', '🎆', '🎇', '🙏', '🌸', '🍬', '❤️', '🎉', '🕉️'];
 
 const SPINTAX_SNIPPETS = [
@@ -51,6 +59,18 @@ const SPINTAX_SNIPPETS = [
   { label: 'Blessing', text: '{May this Diwali bring|Wishing you} {joy|prosperity|happiness}' },
   { label: 'Sign-off', text: '{With love|Warm regards|Best wishes}' },
 ];
+
+interface UploadState {
+  phase: 'uploading' | 'compressing';
+  fileName: string;
+  kind: 'image' | 'video';
+  percent: number;
+  stage: string;
+  jobId: string | null;
+  cancel: (() => void) | null;
+}
+
+type DraftStatus = 'loading' | 'idle' | 'saving' | 'saved' | 'error';
 
 export function BroadcastComposer({
   sessionId,
@@ -63,33 +83,110 @@ export function BroadcastComposer({
   const [groupId, setGroupId] = useState<string>('');
   const [campaignName, setCampaignName] = useState('');
   const [template, setTemplate] = useState(DEFAULT_TEMPLATE);
-  const [file, setFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [media, setMedia] = useState<MediaInfo | null>(null);
+  const [upload, setUpload] = useState<UploadState | null>(null);
+  const [sendMode, setSendMode] = useState<'now' | 'schedule'>('now');
+  const [scheduleLocal, setScheduleLocal] = useState('');
+  const [quietHours, setQuietHours] = useState<QuietHoursSettings | null>(null);
+  const [quietEdit, setQuietEdit] = useState<{ enabled: boolean; start: string; end: string } | null>(null);
+  const [quietError, setQuietError] = useState<string | null>(null);
+  const [draftStatus, setDraftStatus] = useState<DraftStatus>('loading');
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   const [seed, setSeed] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastSavedDraft = useRef<string>('');
+
+  // ---- Draft: load once, then auto-save -------------------------------------------------
 
   useEffect(() => {
-    if (!groupId && groups[0]) setGroupId(groups[0].id);
-    if (groupId && !groups.some((g) => g.id === groupId)) setGroupId(groups[0]?.id ?? '');
-  }, [groups, groupId]);
+    let cancelled = false;
+    api
+      .draft(sessionId)
+      .then((d) => {
+        if (cancelled) return;
+        if (d.updatedAt) {
+          if (d.groupId) setGroupId(d.groupId);
+          setCampaignName(d.name);
+          setTemplate(d.messageTemplate);
+          setMedia(d.media);
+          if (d.scheduledAt && new Date(d.scheduledAt).getTime() > Date.now()) {
+            setSendMode('schedule');
+            setScheduleLocal(toLocalInputValue(new Date(d.scheduledAt)));
+          }
+          setDraftSavedAt(d.updatedAt);
+        }
+        setDraftStatus(d.updatedAt ? 'saved' : 'idle');
+      })
+      .catch(() => {
+        if (!cancelled) setDraftStatus('idle');
+      });
+    api
+      .quietHours()
+      .then((q) => {
+        if (!cancelled) setQuietHours(q);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  const scheduledAtIso = useMemo(() => {
+    if (sendMode !== 'schedule' || !scheduleLocal) return null;
+    const d = new Date(scheduleLocal);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }, [sendMode, scheduleLocal]);
+
+  const draftPayload = useMemo(
+    () => ({
+      groupId: groupId || null,
+      name: campaignName,
+      messageTemplate: template,
+      mediaFile: media?.file ?? null,
+      scheduledAt: scheduledAtIso,
+    }),
+    [groupId, campaignName, template, media, scheduledAtIso],
+  );
 
   useEffect(() => {
-    if (!file) {
-      setPreviewUrl(null);
+    if (draftStatus === 'loading') return;
+    const serialized = JSON.stringify(draftPayload);
+    if (!lastSavedDraft.current) {
+      lastSavedDraft.current = serialized; // what we just loaded — nothing to save yet
       return;
     }
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    if (serialized === lastSavedDraft.current) return;
+    const timer = setTimeout(() => {
+      setDraftStatus('saving');
+      api
+        .saveDraft(sessionId, draftPayload)
+        .then((r) => {
+          lastSavedDraft.current = serialized;
+          setDraftSavedAt(r.updatedAt);
+          setDraftStatus('saved');
+        })
+        .catch(() => setDraftStatus('error'));
+    }, DRAFT_SAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [draftPayload, draftStatus, sessionId]);
+
+  // ---- Groups / preview ---------------------------------------------------------------
+
+  useEffect(() => {
+    if (draftStatus === 'loading') return;
+    if (!groupId && groups[0]) setGroupId(groups[0].id);
+    if (groupId && groups.length > 0 && !groups.some((g) => g.id === groupId)) setGroupId(groups[0]?.id ?? '');
+  }, [groups, groupId, draftStatus]);
 
   const group = groups.find((g) => g.id === groupId) ?? null;
   const recipients = group?.contactIds.length ?? 0;
   const contactById = useMemo(() => new Map(contacts.map((c) => [c.id, c])), [contacts]);
+  const previewUrl = media ? `/uploads/${media.file}` : null;
+  const isVideo = media?.mediaType === 'video';
 
   const sampleContact = useMemo(() => {
     if (!group || group.contactIds.length === 0) return null;
@@ -140,35 +237,125 @@ export function BroadcastComposer({
     });
   };
 
-  const onFileChosen = (chosen: File | null) => {
-    setError(null);
-    if (!chosen) {
-      setFile(null);
-      return;
-    }
-    const isImage = IMAGE_TYPES.includes(chosen.type);
-    const isVideo = VIDEO_TYPES.includes(chosen.type);
-    if (!isImage && !isVideo) {
-      setError('Attach a JPG/PNG/WEBP image or an MP4/3GP video.');
-      return;
-    }
-    if ((isImage && chosen.size > IMAGE_MAX) || (isVideo && chosen.size > VIDEO_MAX)) {
-      setError(`File is too large (max ${isImage ? '16' : '64'} MB).`);
-      return;
-    }
-    setFile(chosen);
+  // ---- Attachments: upload → server compresses → ready -----------------------------------
+
+  // Refs mirror state so async callbacks always see the latest values.
+  const uploadRef = useRef<UploadState | null>(null);
+  uploadRef.current = upload;
+  const mediaRef = useRef<MediaInfo | null>(null);
+  mediaRef.current = media;
+
+  const setUploadState = (next: UploadState | null) => {
+    uploadRef.current = next;
+    setUpload(next);
   };
 
-  const clearFile = () => {
-    setFile(null);
+  const finishJob = useCallback(
+    (job: MediaJob) => {
+      const current = uploadRef.current;
+      if (!current || current.jobId !== job.id) return;
+      if (job.status === 'processing') {
+        setUploadState({ ...current, percent: job.progress, stage: job.stage });
+        return;
+      }
+      setUploadState(null);
+      if (job.status === 'ready' && job.result) {
+        const previous = mediaRef.current;
+        setMedia(job.result);
+        if (previous && previous.file !== job.result.file) void api.deleteMedia(sessionId, previous.file);
+      } else {
+        setError(job.error ?? 'Could not process the file.');
+      }
+    },
+    [sessionId],
+  );
+
+  // Follow the compression job: live socket updates, plus polling in case an event is missed.
+  const activeJobId = upload?.jobId ?? null;
+  useEffect(() => {
+    if (!activeJobId) return;
+    const socket = getSocket();
+    const onJob = (job: MediaJob) => {
+      if (job.id === activeJobId) finishJob(job);
+    };
+    socket.on('media_job', onJob);
+    const poll = setInterval(() => {
+      api
+        .mediaJob(sessionId, activeJobId)
+        .then(finishJob)
+        .catch((err: unknown) => {
+          setUploadState(null);
+          setError(err instanceof Error ? err.message : 'Lost track of the upload. Attach the file again.');
+        });
+    }, 3_000);
+    return () => {
+      socket.off('media_job', onJob);
+      clearInterval(poll);
+    };
+  }, [activeJobId, finishJob, sessionId]);
+
+  const onFileChosen = (chosen: File | null) => {
+    setError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (!chosen) return;
+    const kind = chosen.type.startsWith('image/') || IMAGE_EXT.test(chosen.name) ? 'image' : chosen.type.startsWith('video/') || VIDEO_EXT.test(chosen.name) ? 'video' : null;
+    if (!kind || (kind === 'image' && !IMAGE_EXT.test(chosen.name) && !/^image\/(jpeg|png|webp)$/.test(chosen.type))) {
+      setError('Attach a JPG, PNG or WebP image, or an MP4, MOV or MKV video.');
+      return;
+    }
+    if (kind === 'image' && chosen.size > IMAGE_MAX) return setError('Images can be up to 25 MB.');
+    if (kind === 'video' && chosen.size > VIDEO_MAX) return setError('Videos can be up to 500 MB before compression.');
+
+    const { promise, cancel } = uploadMedia(sessionId, chosen, (percent) => {
+      const u = uploadRef.current;
+      if (u && u.phase === 'uploading') setUploadState({ ...u, percent });
+    });
+    setUploadState({ phase: 'uploading', fileName: chosen.name, kind, percent: 0, stage: 'Uploading', jobId: null, cancel });
+    promise
+      .then((job) => {
+        const u = uploadRef.current;
+        if (!u) return; // cancelled meanwhile
+        setUploadState({ ...u, phase: 'compressing', percent: job.progress, stage: job.stage, jobId: job.id, cancel: null });
+        if (job.status !== 'processing') finishJob(job);
+      })
+      .catch((err: unknown) => {
+        setUploadState(null);
+        if (err instanceof Error && err.message === 'Upload cancelled.') return;
+        setError(err instanceof Error ? err.message : 'Upload failed.');
+      });
+  };
+
+  const removeMedia = () => {
+    if (media) void api.deleteMedia(sessionId, media.file);
+    setMedia(null);
+  };
+
+  // ---- Schedule & quiet hours ----------------------------------------------------------
+
+  const startAt = scheduledAtIso ? new Date(scheduledAtIso) : null;
+  const etaMs = estimateDurationMs(recipients);
+  const touchesQuiet = quietHours ? runTouchesQuietHours(startAt ?? new Date(), etaMs, quietHours) : false;
+
+  const saveQuiet = async () => {
+    if (!quietEdit) return;
+    setQuietError(null);
+    try {
+      setQuietHours(await api.saveQuietHours(quietEdit));
+      setQuietEdit(null);
+    } catch (err) {
+      setQuietError(err instanceof Error ? err.message : 'Could not save quiet hours.');
+    }
   };
 
   const validationError = (() => {
     if (!group) return 'Create a contact group first.';
     if (recipients === 0) return 'The selected group has no contacts.';
-    if (!template.trim() && !file) return 'Write a message or attach media.';
+    if (upload) return 'Wait for the attachment to finish processing.';
+    if (!template.trim() && !media) return 'Write a message or attach media.';
     if (templateError) return templateError;
+    if (sendMode === 'schedule' && (!startAt || startAt.getTime() < Date.now() + 60_000)) {
+      return 'Pick a start time at least a minute from now.';
+    }
     return null;
   })();
 
@@ -177,15 +364,19 @@ export function BroadcastComposer({
     setSubmitting(true);
     setError(null);
     try {
-      const form = new FormData();
-      form.append('groupId', group.id);
-      form.append('messageTemplate', template);
-      if (campaignName.trim()) form.append('name', campaignName.trim());
-      if (file) form.append('media', file);
-      const campaign = await api.createCampaign(sessionId, form);
+      const campaign = await api.createCampaign(sessionId, {
+        groupId: group.id,
+        messageTemplate: template,
+        name: campaignName.trim() || undefined,
+        mediaFile: media?.file ?? null,
+        scheduledAt: sendMode === 'schedule' ? scheduledAtIso : null,
+      });
       setModalOpen(false);
-      clearFile();
+      // The server cleared the draft; start the next one fresh (the template is kept for reuse).
+      setMedia(null);
       setCampaignName('');
+      setSendMode('now');
+      setScheduleLocal('');
       onCreated(campaign);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start the campaign');
@@ -209,8 +400,6 @@ export function BroadcastComposer({
       </div>
     );
   }
-
-  const isVideo = file ? VIDEO_TYPES.includes(file.type) : false;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
@@ -331,7 +520,32 @@ export function BroadcastComposer({
           <span className="mb-1.5 block text-sm font-medium text-stone-700">
             Attachment <span className="font-normal text-stone-400">(optional — message becomes the caption)</span>
           </span>
-          {file && previewUrl ? (
+          {upload ? (
+            <div className="rounded-xl border border-diya-200 bg-diya-50/50 p-4" aria-live="polite">
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="flex min-w-0 items-center gap-2 font-medium text-stone-800">
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-diya-500" />
+                  <span className="truncate">{upload.fileName}</span>
+                </span>
+                {upload.cancel && (
+                  <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={upload.cancel}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-stone-200">
+                <div className="h-full bg-diya-500 transition-all duration-300" style={{ width: `${upload.percent}%` }} />
+              </div>
+              <p className="mt-2 text-xs text-stone-600">
+                {upload.phase === 'uploading'
+                  ? `Uploading… ${upload.percent}%`
+                  : `${upload.stage} · ${upload.percent}%`}
+                {upload.phase === 'compressing' && upload.kind === 'video' && (
+                  <> — videos can take a minute or two. You can keep writing meanwhile.</>
+                )}
+              </p>
+            </div>
+          ) : media && previewUrl ? (
             <div className="flex items-start gap-4 rounded-xl border border-stone-200 p-3">
               {isVideo ? (
                 <video src={previewUrl} className="h-28 w-40 rounded-lg bg-black object-cover" controls muted />
@@ -341,32 +555,158 @@ export function BroadcastComposer({
               <div className="min-w-0 flex-1 text-sm">
                 <p className="flex items-center gap-1.5 truncate font-medium text-stone-800">
                   {isVideo ? <Video className="h-4 w-4" /> : <ImageIcon className="h-4 w-4" />}
-                  {file.name}
+                  {media.originalName}
+                </p>
+                <p className="mt-1 text-xs text-stone-600">
+                  Compressed <span className="line-through opacity-70">{formatBytes(media.originalSize)}</span> →{' '}
+                  <strong className="text-emerald-700">{formatBytes(media.size)}</strong>
                 </p>
                 <p className="text-xs text-stone-500">
-                  {formatBytes(file.size)} · {file.type}
+                  {media.width && media.height ? `${media.width}×${media.height}` : ''}
+                  {media.durationSec ? ` · ${formatDuration(media.durationSec * 1000)}` : ''}
+                  {isVideo ? ' · H.264 MP4' : ' · JPEG, metadata removed'}
                 </p>
               </div>
-              <button type="button" className="btn-ghost p-1.5" onClick={clearFile} title="Remove">
+              <button type="button" className="btn-ghost p-1.5" onClick={removeMedia} title="Remove attachment">
                 <X className="h-4 w-4" />
               </button>
             </div>
           ) : (
             <button
               type="button"
-              className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-stone-200 px-4 py-6 text-sm text-stone-500 transition hover:border-diya-300 hover:bg-diya-50/40"
+              className="flex w-full flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-stone-200 px-4 py-6 text-sm text-stone-500 transition hover:border-diya-300 hover:bg-diya-50/40"
               onClick={() => fileInputRef.current?.click()}
             >
-              <Paperclip className="h-4 w-4" /> Attach an image (≤16 MB) or MP4 video (≤64 MB)
+              <span className="flex items-center gap-2">
+                <Paperclip className="h-4 w-4" /> Attach an image or video
+              </span>
+              <span className="text-xs text-stone-400">
+                JPG/PNG/WebP up to 25 MB · MP4/MOV/MKV up to 500 MB — compressed automatically
+              </span>
             </button>
           )}
           <input
             ref={fileInputRef}
             type="file"
-            accept={[...IMAGE_TYPES, ...VIDEO_TYPES].join(',')}
+            accept={ACCEPT}
             className="hidden"
             onChange={(e) => onFileChosen(e.target.files?.[0] ?? null)}
           />
+        </div>
+
+        <div>
+          <span className="mb-1.5 block text-sm font-medium text-stone-700">When to send</span>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label
+              className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2.5 text-sm ${
+                sendMode === 'now' ? 'border-diya-400 bg-diya-50/60' : 'border-stone-200'
+              }`}
+            >
+              <input type="radio" name="send-mode" className="accent-diya-500" checked={sendMode === 'now'} onChange={() => setSendMode('now')} />
+              <Send className="h-4 w-4 text-stone-500" /> Start right away
+            </label>
+            <label
+              className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2.5 text-sm ${
+                sendMode === 'schedule' ? 'border-diya-400 bg-diya-50/60' : 'border-stone-200'
+              }`}
+            >
+              <input
+                type="radio"
+                name="send-mode"
+                className="accent-diya-500"
+                checked={sendMode === 'schedule'}
+                onChange={() => {
+                  setSendMode('schedule');
+                  if (!scheduleLocal) {
+                    const tomorrow7 = new Date();
+                    tomorrow7.setDate(tomorrow7.getDate() + 1);
+                    tomorrow7.setHours(7, 0, 0, 0);
+                    setScheduleLocal(toLocalInputValue(tomorrow7));
+                  }
+                }}
+              />
+              <CalendarClock className="h-4 w-4 text-stone-500" /> Schedule for later
+            </label>
+          </div>
+          {sendMode === 'schedule' && (
+            <div className="mt-3">
+              <input
+                id="schedule-at"
+                type="datetime-local"
+                className="input w-auto"
+                value={scheduleLocal}
+                min={toLocalInputValue(new Date(Date.now() + 60_000))}
+                onChange={(e) => setScheduleLocal(e.target.value)}
+              />
+              <p className="mt-1.5 text-xs text-stone-500">
+                In your browser&apos;s time zone ({Intl.DateTimeFormat().resolvedOptions().timeZone}). The server starts it on
+                its own — you can close this page.
+              </p>
+            </div>
+          )}
+
+          <div className="mt-3 rounded-xl border border-stone-200 bg-stone-50/60 px-3 py-2.5 text-xs text-stone-600">
+            {quietEdit ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    className="accent-diya-500"
+                    checked={quietEdit.enabled}
+                    onChange={(e) => setQuietEdit({ ...quietEdit, enabled: e.target.checked })}
+                  />
+                  Quiet hours from
+                </label>
+                <input
+                  id="quiet-start"
+                  type="time"
+                  className="input w-auto px-2 py-1 text-xs"
+                  value={quietEdit.start}
+                  onChange={(e) => setQuietEdit({ ...quietEdit, start: e.target.value })}
+                />
+                to
+                <input
+                  id="quiet-end"
+                  type="time"
+                  className="input w-auto px-2 py-1 text-xs"
+                  value={quietEdit.end}
+                  onChange={(e) => setQuietEdit({ ...quietEdit, end: e.target.value })}
+                />
+                <span className="text-stone-400">({quietHours?.timeZone})</span>
+                <button type="button" className="btn-primary px-3 py-1 text-xs" onClick={() => void saveQuiet()}>
+                  <Check className="h-3.5 w-3.5" /> Save
+                </button>
+                <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setQuietEdit(null)}>
+                  Cancel
+                </button>
+                {quietError && <span className="w-full text-rose-600">{quietError}</span>}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="min-w-0 flex-1">
+                  <Moon className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
+                  {quietHours?.enabled ? (
+                    <>
+                      Quiet hours <strong className="text-stone-800">{quietHours.start}–{quietHours.end}</strong> (
+                      {quietHours.timeZone}): sending pauses and resumes by itself.
+                      {quietHours.activeNow && <strong className="text-amber-700"> In effect now.</strong>}
+                    </>
+                  ) : (
+                    'Quiet hours are off — messages can go out at any time.'
+                  )}
+                </span>
+                {quietHours && (
+                  <button
+                    type="button"
+                    className="font-medium text-diya-700 hover:underline"
+                    onClick={() => setQuietEdit({ enabled: quietHours.enabled, start: quietHours.start, end: quietHours.end })}
+                  >
+                    Change
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {error && <p className="rounded-xl bg-rose-50 px-4 py-2 text-sm text-rose-700">{error}</p>}
@@ -416,8 +756,22 @@ export function BroadcastComposer({
             <span className="flex items-center gap-2 text-stone-600">
               <Clock className="h-4 w-4" /> Estimated time
             </span>
-            <strong>~{formatDuration(estimateDurationMs(recipients))}</strong>
+            <strong>~{formatDuration(etaMs)}</strong>
           </div>
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-2 text-stone-600">
+              <CalendarClock className="h-4 w-4" /> Starts
+            </span>
+            <strong>
+              {startAt ? startAt.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Right away'}
+            </strong>
+          </div>
+          {touchesQuiet && quietHours && (
+            <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800">
+              This run overlaps quiet hours ({describeWindow(quietHours)}). It pauses then and continues at{' '}
+              {quietHours.end}, so it finishes later than the estimate.
+            </p>
+          )}
           {variations > 0 && variations < Math.min(recipients, 10) && (
             <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
               Add more spintax options so recipients don&apos;t all receive identical text.
@@ -438,9 +792,15 @@ export function BroadcastComposer({
             }}
             title={validationError ?? undefined}
           >
-            <Send className="h-4 w-4" /> Review & send
+            {sendMode === 'schedule' ? <CalendarClock className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+            {sendMode === 'schedule' ? 'Review & schedule' : 'Review & send'}
           </button>
           {validationError && <p className="text-center text-xs text-stone-500">{validationError}</p>}
+          <p className="text-center text-xs text-stone-400" aria-live="polite">
+            {draftStatus === 'saving' && 'Saving draft…'}
+            {draftStatus === 'saved' && draftSavedAt && `Draft saved ${formatRelative(draftSavedAt)}`}
+            {draftStatus === 'error' && <span className="text-rose-600">Couldn’t save the draft — check the connection.</span>}
+          </p>
         </section>
       </aside>
 
@@ -449,8 +809,9 @@ export function BroadcastComposer({
         groupName={group?.name ?? ''}
         recipients={recipients}
         variations={variations}
-        hasMedia={file !== null}
-        mediaKind={isVideo ? 'video' : 'image'}
+        media={media}
+        startAt={startAt}
+        quietHours={touchesQuiet ? quietHours : null}
         preview={preview}
         submitting={submitting}
         error={error}

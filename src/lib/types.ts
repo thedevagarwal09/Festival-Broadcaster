@@ -23,7 +23,13 @@ export interface SessionSnapshot {
   qrAttempt: number;
 }
 
-export type CampaignStatus = 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'ABORTED';
+export type CampaignStatus =
+  | 'SCHEDULED' // waiting for its start time
+  | 'PROCESSING' // sending
+  | 'PAUSED' // paused by you (or because WhatsApp was unlinked)
+  | 'QUIET_HOURS_PAUSED' // paused automatically during quiet hours; resumes by itself
+  | 'COMPLETED'
+  | 'ABORTED';
 export type QueueStatus = 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELLED';
 export type MediaType = 'image' | 'video';
 
@@ -64,13 +70,73 @@ export interface CampaignDTO {
   messageTemplate: string;
   mediaPath: string | null;
   mediaType: MediaType | null;
+  mediaSize: number | null;
+  mediaDuration: number | null;
   status: CampaignStatus;
+  /** Start time for scheduled campaigns. */
+  scheduledAt: string | null;
   totalRecipients: number;
+  /** Accepted by WhatsApp's server ("dispatched"). */
   sentCount: number;
   failedCount: number;
+  /** Reached the recipient's phone (from delivery receipts). */
+  deliveredCount: number;
+  /** Opened — only counted when the recipient shares read receipts. */
+  readCount: number;
+  startedAt: string | null;
+  lastDispatchAt: string | null;
+  /** Real average time between messages so far, including pauses for cooldowns (null until 2 sent). */
+  avgIntervalMs: number | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+}
+
+/** A compressed attachment ready to broadcast. */
+export interface MediaInfo {
+  /** File name inside the uploads folder. */
+  file: string;
+  mediaType: MediaType;
+  mimeType: string;
+  /** Bytes after compression, and before. */
+  size: number;
+  originalSize: number;
+  originalName: string;
+  width: number | null;
+  height: number | null;
+  /** Seconds (videos only). */
+  durationSec: number | null;
+}
+
+export interface MediaJob {
+  id: string;
+  sessionId: string;
+  status: 'processing' | 'ready' | 'failed';
+  /** 0–100 */
+  progress: number;
+  stage: string;
+  result: MediaInfo | null;
+  error: string | null;
+}
+
+export interface DraftDTO {
+  groupId: string | null;
+  name: string;
+  messageTemplate: string;
+  media: MediaInfo | null;
+  scheduledAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface QuietHoursSettings {
+  enabled: boolean;
+  /** "HH:MM", 24-hour, in the server's time zone */
+  start: string;
+  end: string;
+  /** IANA time zone the server runs in, e.g. Asia/Kolkata (read-only) */
+  timeZone: string;
+  /** Whether quiet hours are in effect right now (read-only) */
+  activeNow: boolean;
 }
 
 export type LogLevel = 'info' | 'warn' | 'processing' | 'sent' | 'failed';
@@ -100,6 +166,7 @@ export interface ServerToClientEvents {
   contacts_sync_state: (payload: ContactSyncState) => void;
   campaign_progress: (payload: CampaignDTO) => void;
   campaign_log: (payload: CampaignLogEntry) => void;
+  media_job: (payload: MediaJob) => void;
 }
 
 export interface ClientToServerEvents {
