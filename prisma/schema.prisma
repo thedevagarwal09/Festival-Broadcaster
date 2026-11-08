@@ -9,7 +9,8 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// App-wide settings, e.g. the hashed login PIN (key "pinHash").
+/// App-wide key/value settings. Currently unused; kept so existing databases (which may hold a
+/// row from the removed PIN feature) migrate without a destructive table drop.
 model AppSetting {
   key       String   @id
   value     String

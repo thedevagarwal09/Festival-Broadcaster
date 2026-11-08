@@ -1,7 +1,7 @@
 'use client';
 
 /* eslint-disable @next/next/no-img-element */
-import { Loader2, Lock, QrCode, RefreshCw, ShieldCheck, Smartphone, WifiOff } from 'lucide-react';
+import { Loader2, QrCode, RefreshCw, ShieldCheck, Smartphone, WifiOff } from 'lucide-react';
 import type { SessionSnapshot } from '@/lib/types';
 
 interface QrLoginProps {
@@ -10,7 +10,6 @@ interface QrLoginProps {
   socketConnected: boolean;
   error: string | null;
   onRefresh: () => void;
-  onLock: () => void;
 }
 
 const STEPS = [
@@ -19,15 +18,12 @@ const STEPS = [
   'Tap “Link a device” and point your camera at this code',
 ];
 
-export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh, onLock }: QrLoginProps) {
+export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh }: QrLoginProps) {
   const expired = snapshot.status === 'idle' || snapshot.status === 'conflict';
   const waiting = !qr && !expired;
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center p-6">
-      <button type="button" className="btn-secondary absolute right-6 top-6" onClick={onLock}>
-        <Lock className="h-4 w-4" /> Lock
-      </button>
+    <main className="flex min-h-screen items-center justify-center p-6">
       <div className="card grid w-full max-w-4xl overflow-hidden md:grid-cols-2">
         <section className="flex flex-col justify-between bg-gradient-to-br from-diya-500 via-diya-600 to-rose-600 p-8 text-white">
           <div>

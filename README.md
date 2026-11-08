@@ -28,11 +28,8 @@ any paid service. The database is a local SQLite file, and the app needs no Redi
 ├── prisma/
 │   ├── schema.prisma            # UserSession, Contact, ContactGroup, BroadcastCampaign, QueueItem
 │   └── dev.db                   # created by `npx prisma db push`
-├── scripts/reset-pin.ts         # `npm run pin:reset` — clears a forgotten PIN
 ├── server/                      # Node backend (runs Next.js as a custom server on :3000)
-│   ├── index.ts                 # Express + Socket.IO + Next.js bootstrap, auth wiring, crash recovery
-│   ├── auth/                    # PIN hashing (scrypt), unlock sessions, lockout, origin checks
-│   ├── routes/auth.ts           # /api/auth: status, setup, login, logout, ping, change
+│   ├── index.ts                 # Express + Socket.IO + Next.js bootstrap, crash recovery, shutdown
 │   ├── db.ts                    # Prisma client (SQLite, WAL mode)
 │   ├── realtime.ts              # Socket.IO room helpers
 │   ├── socket-handlers.ts       # init_session / refresh_qr events
@@ -85,8 +82,6 @@ npm run dev
 
 Then open <http://localhost:3000>:
 
-0. **Choose a 4-digit PIN.** The first time you open the app it asks for one. You'll enter it every
-   time you open the app or after it locks itself.
 1. **Link WhatsApp.** On your phone, go to WhatsApp → Settings → Linked devices → Link a device, and scan the QR
    code. A new code appears about every 20 s. If the codes run out, click "Generate new code".
 2. **Wait for contacts.** WhatsApp sends your contacts in bursts after linking. This can take from a few seconds
@@ -121,11 +116,10 @@ build and run it straight from GitHub.
    |---|---|---|
    | `PUBLISH_PORT` | `3005` | Port on the server, e.g. `http://<server-ip>:3005` |
    | `TZ` | `Asia/Kolkata` | Time zone for logs and campaign names |
-   | `COOKIE_SECURE` | `false` | Set to `true` only if you serve the app over **HTTPS** (reverse proxy) |
    | `BAILEYS_LOG_LEVEL` | `silent` | `info` / `debug` for WhatsApp protocol logs |
 
 4. Click **Deploy the stack**. The first build takes a few minutes.
-5. Open `http://<server-ip>:3005`, create your PIN and scan the QR code. A fresh server starts with
+5. Open `http://<server-ip>:3005` and scan the QR code. A fresh server starts with
    no data: your contacts sync from WhatsApp, and you create groups again.
 
 To pick up new commits later, open the stack and click **Pull and redeploy**. You can also turn on
@@ -136,7 +130,7 @@ Everything is in the named volume **`festival-data`**, mounted at `/data`:
 
 | Path | Contents |
 |---|---|
-| `/data/app.db` | Contacts, groups, campaigns, PIN hash (SQLite) |
+| `/data/app.db` | Contacts, groups and campaigns (SQLite) |
 | `/data/sessions/` | WhatsApp login keys. **Treat like a password.** |
 | `/data/uploads/` | Attached images and videos |
 
@@ -147,17 +141,11 @@ the app. To back it up, run this on the server:
 docker run --rm -v festival-broadcaster_festival-data:/data -v "$PWD":/backup busybox tar czf /backup/festival-data.tgz -C /data .
 ```
 
-To reset a forgotten PIN, use the container's **Console** in Portainer, or run this on the server, then restart the container:
-
-```bash
-docker exec festival-broadcaster npm run pin:reset
-```
-
 ### 3. Security on a server
-- **The PIN guards the app**, but on plain `http://` it travels over the network unencrypted. Only
-  use the app on your own LAN or VPN. Anywhere else, put it behind an HTTPS reverse proxy (Nginx
-  Proxy Manager, Traefik, Caddy) and set `COOKIE_SECURE=true`.
-- **Don't open port 3005 on your router or firewall to the internet.**
+- **The app has no login.** Anyone who can open `http://<server-ip>:3005` can see your contacts
+  and send WhatsApp messages as you. Only make the port reachable from your own LAN or VPN.
+- **Don't open port 3005 on your router or firewall to the internet.** If you need remote access,
+  use a VPN (WireGuard, Tailscale) or a reverse proxy that adds its own login.
 - **One WhatsApp account per instance.** If you also run the app on your laptop, unlink one of
   them, or each will keep its own separate contacts and campaigns.
 
@@ -191,37 +179,9 @@ docker exec festival-broadcaster npm run pin:reset
 
 All pacing values live in [`src/lib/pacing.ts`](src/lib/pacing.ts).
 
-## Security: the 4-digit PIN
-
-Nothing that touches WhatsApp or your data loads until you unlock the app with your PIN.
-
-- **What's protected:** every API route, the live Socket.IO connection and uploaded media all
-  require an unlocked session. Requests from other websites are refused (Origin check).
-- **How it's stored:** only a salted scrypt hash of the PIN, in the local SQLite database. The PIN
-  itself is never stored or logged.
-- **Unlocking:** creates a random 256-bit session cookie (`HttpOnly`, `SameSite=Strict`), kept in
-  server memory only, so restarting the server locks every browser.
-- **Auto-lock:** after 15 minutes without mouse, keyboard or touch activity, and after at most
-  12 hours however active you are. The **Lock** button locks immediately. Running campaigns keep
-  sending while the app is locked.
-- **Wrong PINs:** 5 attempts are allowed, then the app locks you out for 30 s. Each further
-  mistake doubles the lockout, up to 15 minutes.
-- **Weak PINs are rejected:** repeated digits (1111), sequences (1234, 4321) and the most common
-  PINs (1212, 2580…).
-- **Change PIN:** in the dashboard header. It needs your current PIN and locks every other browser.
-- **Forgot it?** Stop the server and reset the PIN. Your WhatsApp link, contacts and groups are
-  kept. Start the server again and choose a new PIN:
-
-```bash
-npm run pin:reset
-```
-
-A 4-digit PIN stops someone casually opening the app on your unlocked computer. It doesn't protect
-against someone who can read your files: the `sessions/` folder holds the WhatsApp login itself.
-Keep your computer locked and FileVault (or BitLocker) on.
-
 ## Notes and limits
-- The server binds to `127.0.0.1`, and the PIN is designed for one computer. Don't expose it to a network.
+- The app has no login. Run locally, the server binds to `127.0.0.1` so only your computer can reach it.
+  In Docker it listens on the published port, so keep that port on a trusted network.
 - `./sessions/` contains full access to your WhatsApp account. Never share or commit it.
 - If the process dies after WhatsApp accepted a message but before SQLite recorded it, that one recipient may get
   the message twice after restart. This is rare, but it is the trade-off for crash-safe resumption.

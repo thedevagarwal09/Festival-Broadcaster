@@ -5,16 +5,16 @@ import { Server as SocketIOServer } from 'socket.io';
 import { configureDatabase, prisma } from './db';
 import { Dispatcher } from './queue/dispatcher';
 import { setIO, type IOServer } from './realtime';
-import { AuthStore, isSameOrigin, tokenFromRequest } from './auth/auth-store';
 import { createApiRouter } from './routes/api';
-import { createAuthRouter, requireAuth } from './routes/auth';
 import { registerSocketHandlers } from './socket-handlers';
 import { UPLOAD_DIR } from './upload';
+import { isSameOrigin } from './utils/origin';
 import { SessionManager } from './whatsapp/session-manager';
 
 const dev = process.env.NODE_ENV !== 'production';
 const port = Number(process.env.PORT ?? 3000);
-// Loopback only by default: this app has no login screen, so never expose it to your network.
+// Loopback only by default: the app has no login, so anyone who can reach it can use your WhatsApp.
+// The Docker image sets HOST=0.0.0.0 — keep that port on a trusted LAN/VPN only.
 const host = process.env.HOST ?? '127.0.0.1';
 
 async function main(): Promise<void> {
@@ -28,8 +28,6 @@ async function main(): Promise<void> {
   app.disable('x-powered-by');
   const httpServer = http.createServer(app);
 
-  const auth = new AuthStore();
-
   const io: IOServer = new SocketIOServer(httpServer, {
     // Leave non-Socket.IO upgrades (Next.js HMR) alone instead of destroying them.
     destroyUpgrade: false,
@@ -38,29 +36,6 @@ async function main(): Promise<void> {
     allowRequest: (req, callback) => callback(null, isSameOrigin(req)),
   });
   setIO(io);
-
-  // Only unlocked browsers may open the live socket.
-  io.use((socket, next) => {
-    const token = tokenFromRequest(socket.request);
-    if (auth.validate(token)) {
-      (socket.data as { authToken?: string }).authToken = token;
-      next();
-    } else {
-      next(new Error('unauthorized'));
-    }
-  });
-  const dropLockedSockets = (): void => {
-    for (const socket of io.sockets.sockets.values()) {
-      const token = (socket.data as { authToken?: string }).authToken;
-      if (!auth.validate(token, false)) socket.disconnect(true);
-    }
-  };
-  auth.onRevoke(() => dropLockedSockets());
-  const sweepTimer = setInterval(() => {
-    auth.sweep();
-    dropLockedSockets();
-  }, 30_000);
-  sweepTimer.unref();
 
   const sessions = new SessionManager();
   const dispatcher = new Dispatcher(sessions);
@@ -79,9 +54,12 @@ async function main(): Promise<void> {
     }
     res.status(403).json({ error: 'Cross-site requests are not allowed.' });
   });
-  app.use('/api/auth', createAuthRouter(auth));
-  app.use('/api', requireAuth(auth), createApiRouter({ sessions, dispatcher }));
-  app.use('/uploads', requireAuth(auth), express.static(UPLOAD_DIR, { fallthrough: false, index: false }));
+  // Liveness probe for the Docker health check.
+  app.get('/api/health', (_req, res) => {
+    res.json({ ok: true });
+  });
+  app.use('/api', createApiRouter({ sessions, dispatcher }));
+  app.use('/uploads', express.static(UPLOAD_DIR, { fallthrough: false, index: false }));
   app.all('*', (req, res) => {
     void handleNext(req, res);
   });

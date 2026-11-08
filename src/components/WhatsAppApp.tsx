@@ -4,26 +4,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Dashboard } from './Dashboard';
 import { QrLogin } from './QrLogin';
-import { useIdleLock } from './useIdleLock';
-import { AUTH_REQUIRED_EVENT, api } from '@/lib/api';
+import { api } from '@/lib/api';
 import { getOrCreateSessionId, rotateSessionId } from '@/lib/session-id';
 import { getSocket } from '@/lib/socket';
 import type { SessionSnapshot, SessionUser } from '@/lib/types';
 
-interface WhatsAppAppProps {
-  /** Lock the app (revokes this browser's unlock and shows the PIN screen). */
-  onLock: () => void;
-}
-
-/** The WhatsApp part of the app. Only mounted while the app is unlocked. */
-export function WhatsAppApp({ onLock }: WhatsAppAppProps) {
+export function WhatsAppApp() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<SessionSnapshot | null>(null);
   const [qr, setQr] = useState<{ qr: string; attempt: number } | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
-  useIdleLock(onLock);
 
   useEffect(() => {
     const id = getOrCreateSessionId();
@@ -73,10 +65,6 @@ export function WhatsAppApp({ onLock }: WhatsAppAppProps) {
     };
     const onLoggedOut = (payload: { sessionId: string }) => rotateFrom(payload.sessionId);
     const onError = (payload: { message: string }) => setError(payload.message);
-    // The server refuses the socket when the unlock expired: show the PIN screen.
-    const onConnectError = (err: Error) => {
-      if (err.message === 'unauthorized') window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
-    };
 
     socket.on('connect', join);
     socket.on('disconnect', onDisconnect);
@@ -85,7 +73,6 @@ export function WhatsAppApp({ onLock }: WhatsAppAppProps) {
     socket.on('session_connected', onConnected);
     socket.on('session_logged_out', onLoggedOut);
     socket.on('session_error', onError);
-    socket.on('connect_error', onConnectError);
     if (socket.connected) join();
 
     return () => {
@@ -96,7 +83,6 @@ export function WhatsAppApp({ onLock }: WhatsAppAppProps) {
       socket.off('session_connected', onConnected);
       socket.off('session_logged_out', onLoggedOut);
       socket.off('session_error', onError);
-      socket.off('connect_error', onConnectError);
     };
   }, [sessionId, rotateFrom]);
 
@@ -131,7 +117,6 @@ export function WhatsAppApp({ onLock }: WhatsAppAppProps) {
       socketConnected={socketConnected}
       onLogout={logout}
       onReconnect={refresh}
-      onLock={onLock}
     />
   ) : (
     <QrLogin
@@ -140,7 +125,6 @@ export function WhatsAppApp({ onLock }: WhatsAppAppProps) {
       socketConnected={socketConnected}
       error={error}
       onRefresh={refresh}
-      onLock={onLock}
     />
   );
 }
