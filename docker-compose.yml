@@ -1,0 +1,33 @@
+# Portainer: Stacks → Add stack → Repository, point it at this repo, compose path "docker-compose.yml".
+# Optional stack environment variables are listed in README.md ("Deploy with Docker / Portainer").
+
+name: festival-broadcaster
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: festival-broadcaster:latest
+    container_name: festival-broadcaster
+    restart: unless-stopped
+    ports:
+      # Host port 3000 by default. Set PUBLISH_PORT to change it.
+      - "${PUBLISH_PORT:-3000}:3000"
+    environment:
+      TZ: ${TZ:-Asia/Kolkata}
+      # Set to "true" only when you reach the app over HTTPS (reverse proxy).
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      BAILEYS_LOG_LEVEL: ${BAILEYS_LOG_LEVEL:-silent}
+    volumes:
+      # Database, WhatsApp login keys and uploaded media. Back this volume up; keep it private.
+      - festival-data:/data
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  festival-data:

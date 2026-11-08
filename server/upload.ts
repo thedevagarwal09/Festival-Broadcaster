@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import multer from 'multer';
 import { HttpError } from './utils/errors';
 
-export const UPLOAD_DIR = path.resolve(process.cwd(), 'uploads');
+/** Override with UPLOAD_DIR (the Docker image uses /data/uploads). */
+export const UPLOAD_DIR = path.resolve(process.cwd(), process.env.UPLOAD_DIR || 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 /** Formats WhatsApp renders natively as image/video messages. */

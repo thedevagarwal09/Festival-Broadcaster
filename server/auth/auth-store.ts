@@ -125,12 +125,15 @@ export function tokenFromRequest(req: IncomingMessage): string | undefined {
   return parseCookies(req.headers.cookie)[AUTH_COOKIE];
 }
 
+/** Set COOKIE_SECURE=true when the app is served over HTTPS (e.g. behind a reverse proxy). */
+const SECURE = /^(1|true|yes)$/i.test(process.env.COOKIE_SECURE ?? '') ? '; Secure' : '';
+
 export function authCookie(token: string): string {
-  return `${AUTH_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(MAX_SESSION_MS / 1000)}`;
+  return `${AUTH_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict${SECURE}; Max-Age=${Math.floor(MAX_SESSION_MS / 1000)}`;
 }
 
 export function clearedAuthCookie(): string {
-  return `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`;
+  return `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Strict${SECURE}; Max-Age=0`;
 }
 
 /**

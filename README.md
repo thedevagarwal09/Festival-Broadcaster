@@ -17,6 +17,9 @@ any paid service. The database is a local SQLite file, and the app needs no Redi
 ```
 .
 ├── package.json
+├── Dockerfile                   # production image (state lives in the /data volume)
+├── docker-compose.yml           # Portainer / docker compose stack
+├── .dockerignore                # keeps sessions, DB and .env out of the image
 ├── tsconfig.json
 ├── next.config.mjs
 ├── tailwind.config.ts
@@ -99,6 +102,64 @@ For a production build, run:
 ```bash
 npm run build && npm start
 ```
+
+## Deploy with Docker / Portainer
+
+The repo includes a `Dockerfile` and a `docker-compose.yml`, so a Linux server running Portainer can
+build and run it straight from GitHub.
+
+### 1. Create the stack in Portainer
+1. Go to **Stacks → Add stack**, name it `festival-broadcaster`, and choose **Repository**.
+2. Fill in the repository settings:
+   - **Repository URL:** `https://github.com/thedevagarwal09/Festival-Broadcaster`
+   - **Repository reference:** `refs/heads/main`
+   - **Compose path:** `docker-compose.yml`
+   - **Authentication:** leave it off while the repo is public.
+3. Optionally, under **Environment variables**, set any of these:
+
+   | Variable | Default | What it does |
+   |---|---|---|
+   | `PUBLISH_PORT` | `3000` | Port on the server, e.g. `http://<server-ip>:3000` |
+   | `TZ` | `Asia/Kolkata` | Time zone for logs and campaign names |
+   | `COOKIE_SECURE` | `false` | Set to `true` only if you serve the app over **HTTPS** (reverse proxy) |
+   | `BAILEYS_LOG_LEVEL` | `silent` | `info` / `debug` for WhatsApp protocol logs |
+
+4. Click **Deploy the stack**. The first build takes a few minutes.
+5. Open `http://<server-ip>:3000`, create your PIN and scan the QR code. A fresh server starts with
+   no data: your contacts sync from WhatsApp, and you create groups again.
+
+To pick up new commits later, open the stack and click **Pull and redeploy**. You can also turn on
+**GitOps updates** to redeploy automatically.
+
+### 2. Where your data lives
+Everything is in the named volume **`festival-data`**, mounted at `/data`:
+
+| Path | Contents |
+|---|---|
+| `/data/app.db` | Contacts, groups, campaigns, PIN hash (SQLite) |
+| `/data/sessions/` | WhatsApp login keys. **Treat like a password.** |
+| `/data/uploads/` | Attached images and videos |
+
+Redeploying or updating the stack keeps the volume. Deleting the volume erases the data and unlinks
+the app. To back it up, run this on the server:
+
+```bash
+docker run --rm -v festival-broadcaster_festival-data:/data -v "$PWD":/backup busybox tar czf /backup/festival-data.tgz -C /data .
+```
+
+To reset a forgotten PIN, use the container's **Console** in Portainer, or run this on the server, then restart the container:
+
+```bash
+docker exec festival-broadcaster npm run pin:reset
+```
+
+### 3. Security on a server
+- **The PIN guards the app**, but on plain `http://` it travels over the network unencrypted. Only
+  use the app on your own LAN or VPN. Anywhere else, put it behind an HTTPS reverse proxy (Nginx
+  Proxy Manager, Traefik, Caddy) and set `COOKIE_SECURE=true`.
+- **Don't open port 3000 on your router or firewall to the internet.**
+- **One WhatsApp account per instance.** If you also run the app on your laptop, unlink one of
+  them, or each will keep its own separate contacts and campaigns.
 
 ## How it works
 

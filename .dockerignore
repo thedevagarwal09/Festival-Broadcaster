@@ -1,0 +1,23 @@
+# Never bake personal data or secrets into the image.
+.env
+.env.*
+!.env.example
+sessions/
+uploads/
+prisma/*.db
+prisma/*.db-*
+prisma/*.db.backup-*
+
+# Rebuilt inside the image.
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+
+# Not needed in the build context.
+.git/
+.gitignore
+.dockerignore
+.DS_Store
+*.log
+.claude/

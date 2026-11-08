@@ -27,7 +27,8 @@ import {
   type SessionUser,
 } from '../../src/lib/types';
 
-export const SESSIONS_DIR = path.resolve(process.cwd(), 'sessions');
+/** WhatsApp login keys. Override with SESSIONS_DIR (the Docker image uses /data/sessions). */
+export const SESSIONS_DIR = path.resolve(process.cwd(), process.env.SESSIONS_DIR || 'sessions');
 
 const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL ?? 'silent' });
 
