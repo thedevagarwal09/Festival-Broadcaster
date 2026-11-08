@@ -119,13 +119,13 @@ build and run it straight from GitHub.
 
    | Variable | Default | What it does |
    |---|---|---|
-   | `PUBLISH_PORT` | `3000` | Port on the server, e.g. `http://<server-ip>:3000` |
+   | `PUBLISH_PORT` | `3005` | Port on the server, e.g. `http://<server-ip>:3005` |
    | `TZ` | `Asia/Kolkata` | Time zone for logs and campaign names |
    | `COOKIE_SECURE` | `false` | Set to `true` only if you serve the app over **HTTPS** (reverse proxy) |
    | `BAILEYS_LOG_LEVEL` | `silent` | `info` / `debug` for WhatsApp protocol logs |
 
 4. Click **Deploy the stack**. The first build takes a few minutes.
-5. Open `http://<server-ip>:3000`, create your PIN and scan the QR code. A fresh server starts with
+5. Open `http://<server-ip>:3005`, create your PIN and scan the QR code. A fresh server starts with
    no data: your contacts sync from WhatsApp, and you create groups again.
 
 To pick up new commits later, open the stack and click **Pull and redeploy**. You can also turn on
@@ -157,7 +157,7 @@ docker exec festival-broadcaster npm run pin:reset
 - **The PIN guards the app**, but on plain `http://` it travels over the network unencrypted. Only
   use the app on your own LAN or VPN. Anywhere else, put it behind an HTTPS reverse proxy (Nginx
   Proxy Manager, Traefik, Caddy) and set `COOKIE_SECURE=true`.
-- **Don't open port 3000 on your router or firewall to the internet.**
+- **Don't open port 3005 on your router or firewall to the internet.**
 - **One WhatsApp account per instance.** If you also run the app on your laptop, unlink one of
   them, or each will keep its own separate contacts and campaigns.
 

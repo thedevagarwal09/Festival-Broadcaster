@@ -12,8 +12,9 @@ services:
     container_name: festival-broadcaster
     restart: unless-stopped
     ports:
-      # Host port 3000 by default. Set PUBLISH_PORT to change it.
-      - "${PUBLISH_PORT:-3000}:3000"
+      # Reach the app at http://<server-ip>:3005. Set PUBLISH_PORT to use another host port.
+      # (Inside the container the app always listens on 3000.)
+      - "${PUBLISH_PORT:-3005}:3000"
     environment:
       TZ: ${TZ:-Asia/Kolkata}
       # Set to "true" only when you reach the app over HTTPS (reverse proxy).
