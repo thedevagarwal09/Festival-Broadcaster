@@ -24,6 +24,8 @@ model UserSession {
   name        String?
   /// INITIALIZING | CONNECTED | LOGGED_OUT
   status      String   @default("INITIALIZING")
+  /// Last time the address book was pulled from WhatsApp. Reconnects skip the pull while this is recent.
+  contactsSyncedAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

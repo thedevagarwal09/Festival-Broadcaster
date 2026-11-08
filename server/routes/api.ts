@@ -138,7 +138,88 @@ export function createApiRouter(deps: { sessions: SessionManager; dispatcher: Di
     }),
   );
 
+  /** Saved-contact count, last address-book sync time, and whether a sync is running. */
+  router.get(
+    '/sessions/:sessionId/contacts/sync',
+    ah(async (req, res) => {
+      res.json(await sessions.contactSyncState(req.params.sessionId));
+    }),
+  );
+
+  /** "Sync now": pull address-book changes from WhatsApp immediately. */
+  router.post(
+    '/sessions/:sessionId/contacts/sync',
+    ah(async (req, res) => {
+      if (!sessions.getConnectedSocket(req.params.sessionId)) {
+        throw new HttpError(409, 'WhatsApp is not connected right now. Try again once it shows Connected.');
+      }
+      res.json(await sessions.syncAddressBook(req.params.sessionId));
+    }),
+  );
+
   // --- Groups ----------------------------------------------------------------
+
+  /** Add contacts to a group, or remove them from it, without touching other members. */
+  router.post(
+    '/sessions/:sessionId/groups/:groupId/members',
+    ah(async (req, res) => {
+      const { sessionId, groupId } = req.params;
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const action = body.action === 'add' || body.action === 'remove' ? body.action : null;
+      if (!action) throw new HttpError(400, 'action must be "add" or "remove".');
+      const ids = await ownedContactIds(sessionId, readIdList(body.contactIds));
+      if (ids.length === 0) throw new HttpError(400, 'Select at least one contact.');
+      const group = await prisma.contactGroup.findFirst({ where: { id: groupId, sessionId } });
+      if (!group) throw new HttpError(404, 'Group not found.');
+      const updated = await prisma.contactGroup.update({
+        where: { id: groupId },
+        data: { contacts: action === 'add' ? { connect: ids } : { disconnect: ids } },
+        include: { contacts: { select: { id: true } } },
+      });
+      res.json(toGroupDTO(updated));
+    }),
+  );
+
+  /** Move contacts from one group to another in a single step. */
+  router.post(
+    '/sessions/:sessionId/groups/move',
+    ah(async (req, res) => {
+      const { sessionId } = req.params;
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const fromGroupId = readString(body.fromGroupId);
+      const toGroupId = readString(body.toGroupId);
+      if (!fromGroupId || !toGroupId) throw new HttpError(400, 'Pick the group to move from and the group to move to.');
+      if (fromGroupId === toGroupId) throw new HttpError(400, 'Choose a different group to move to.');
+
+      const [from, to] = await Promise.all([
+        prisma.contactGroup.findFirst({
+          where: { id: fromGroupId, sessionId },
+          include: { contacts: { select: { id: true } } },
+        }),
+        prisma.contactGroup.findFirst({ where: { id: toGroupId, sessionId } }),
+      ]);
+      if (!from || !to) throw new HttpError(404, 'Group not found.');
+
+      // Only contacts that are actually in the source group are moved.
+      const inSource = new Set(from.contacts.map((c) => c.id));
+      const ids = readIdList(body.contactIds).filter((id) => inSource.has(id)).map((id) => ({ id }));
+      if (ids.length === 0) throw new HttpError(400, `None of the selected contacts are in “${from.name}”.`);
+
+      const [fromAfter, toAfter] = await prisma.$transaction([
+        prisma.contactGroup.update({
+          where: { id: from.id },
+          data: { contacts: { disconnect: ids } },
+          include: { contacts: { select: { id: true } } },
+        }),
+        prisma.contactGroup.update({
+          where: { id: to.id },
+          data: { contacts: { connect: ids } },
+          include: { contacts: { select: { id: true } } },
+        }),
+      ]);
+      res.json({ moved: ids.length, from: toGroupDTO(fromAfter), to: toGroupDTO(toAfter) });
+    }),
+  );
 
   router.get(
     '/sessions/:sessionId/groups',

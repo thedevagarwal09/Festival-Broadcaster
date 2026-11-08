@@ -36,6 +36,16 @@ export interface ContactDTO {
   groupIds: string[];
 }
 
+export interface ContactSyncState {
+  sessionId: string;
+  /** True while the address book is being pulled from WhatsApp. */
+  syncing: boolean;
+  /** When the address book was last fully pulled (null = never). */
+  syncedAt: string | null;
+  /** Contacts saved in the database. */
+  count: number;
+}
+
 export interface GroupDTO {
   id: string;
   name: string;
@@ -87,6 +97,7 @@ export interface ServerToClientEvents {
   session_logged_out: (payload: { sessionId: string; reason: string }) => void;
   session_error: (payload: { message: string }) => void;
   contacts_synced: (payload: { sessionId: string; count: number; received: number }) => void;
+  contacts_sync_state: (payload: ContactSyncState) => void;
   campaign_progress: (payload: CampaignDTO) => void;
   campaign_log: (payload: CampaignLogEntry) => void;
 }

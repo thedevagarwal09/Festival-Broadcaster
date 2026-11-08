@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import makeWASocket, {
   Browsers,
+  proto,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
@@ -22,6 +23,7 @@ import { mergePreviousSessions } from './account-merge';
 import { jidToPhone, normalizePnJid, toSessionUser } from '../utils/jid';
 import {
   isValidSessionId,
+  type ContactSyncState,
   type SessionSnapshot,
   type SessionStatus,
   type SessionUser,
@@ -34,13 +36,14 @@ const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL ?? 'silent' });
 
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const CONTACT_CHUNK_SIZE = 200;
-/** Give Baileys' own initial sync a head start before we request the address book. */
-const ADDRESS_BOOK_SYNC_DELAY_MS = 8_000;
+/** Short pause after connecting so the socket finishes its own start-up queries first. */
+const ADDRESS_BOOK_SYNC_DELAY_MS = 2_000;
 /**
- * New contacts normally arrive instantly (WhatsApp pushes a `server_sync` notification and Baileys
- * re-pulls the collection). This periodic delta pull is only a backstop in case a push is missed.
+ * Contacts are stored in the database, so a reconnect does NOT re-sync them if the last sync is
+ * recent. New or edited contacts still arrive instantly: WhatsApp pushes a `server_sync`
+ * notification and Baileys pulls just that change. This periodic pull is only a backstop.
  */
-const ADDRESS_BOOK_RESYNC_INTERVAL_MS = 15 * 60_000;
+const ADDRESS_BOOK_MAX_AGE_MS = 6 * 60 * 60_000;
 
 interface ManagedSession {
   id: string;
@@ -77,6 +80,7 @@ export class SessionManager {
   private readonly connectedListeners: SessionListener[] = [];
   private readonly loggedOutListeners: SessionListener[] = [];
   private readonly contactSyncChains = new Map<string, Promise<void>>();
+  private readonly addressBookSyncs = new Map<string, Promise<ContactSyncState>>();
   private versionPromise: Promise<WAVersion | undefined> | null = null;
   private shuttingDown = false;
 
@@ -246,12 +250,12 @@ export class SessionManager {
         logger,
         browser: Browsers.macOS('Desktop'),
         markOnlineOnConnect: false,
-        // Don't ask the phone for years of chat history…
+        // Never download chats or messages. History sync is the slow part of linking (the phone
+        // uploads and we decrypt recent conversations) and on reconnect Baileys waits up to 20 s
+        // for it. The only history we accept is the small PUSH_NAME list (WhatsApp profile names).
+        // The address book itself is fetched directly — see scheduleAddressBookSync().
         syncFullHistory: false,
-        // …but DO process the initial/recent sync. In Baileys 6.7.x, leaving this unset makes it
-        // default to `syncFullHistory` (false), which silently skips history AND the app-state sync
-        // that carries the address book — so no contacts would ever arrive.
-        shouldSyncHistoryMessage: () => true,
+        shouldSyncHistoryMessage: (msg) => msg.syncType === proto.HistorySync.HistorySyncType.PUSH_NAME,
         generateHighQualityLinkPreview: false,
       });
       s.sock = sock;
@@ -264,13 +268,8 @@ export class SessionManager {
       });
       sock.ev.on('contacts.upsert', (contacts) => this.queueContactSync(s.id, contacts));
       sock.ev.on('contacts.update', (contacts) => this.queueContactSync(s.id, contacts));
-      sock.ev.on('messaging-history.set', ({ contacts, chats }) => {
-        const fromChats: Array<Partial<WAContact>> = chats.map((chat) => ({
-          id: chat.id,
-          name: chat.name ?? undefined,
-        }));
-        this.queueContactSync(s.id, [...contacts, ...fromChats]);
-      });
+      // Only PUSH_NAME history reaches this (see shouldSyncHistoryMessage): contacts, no chats/messages.
+      sock.ev.on('messaging-history.set', ({ contacts }) => this.queueContactSync(s.id, contacts));
     } catch (err) {
       console.error(`[session:${s.id}] failed to open socket:`, errorMessage(err));
       s.starting = false;
@@ -333,7 +332,9 @@ export class SessionManager {
       emitToSession(s.id, 'contacts_synced', { sessionId: s.id, count, received: 0 });
       console.log(`[session:${s.id}] connected as ${s.user?.phoneNumber ?? 'unknown'} (${count} contacts saved)`);
       for (const listener of this.connectedListeners) listener(s.id);
-      this.scheduleAddressBookSync(s, sock);
+      this.planAddressBookSync(s, sock).catch((err: unknown) =>
+        console.warn(`[session:${s.id}] could not plan address book sync:`, errorMessage(err)),
+      );
       return;
     }
 
@@ -379,34 +380,92 @@ export class SessionManager {
   }
 
   /**
-   * Explicitly pull the address-book collection ("critical_unblock_low") once the initial sync has
-   * settled. Each saved contact arrives as a `contacts.upsert`. If the collection is already up to date
-   * this only fetches the small delta, so it is cheap to run on every connect — and it also repairs
-   * sessions that were linked before history sync was enabled.
+   * Decide when to pull the address book after connecting. Contacts are already in the database,
+   * so if the last sync is recent we skip it entirely and just keep listening for live changes.
    */
-  private scheduleAddressBookSync(s: ManagedSession, sock: WASocket, delayMs = ADDRESS_BOOK_SYNC_DELAY_MS): void {
-    setTimeout(() => {
-      // Stop the cycle once this socket is replaced or closed; the next 'open' starts a new one.
+  private async planAddressBookSync(s: ManagedSession, sock: WASocket): Promise<void> {
+    const row = await prisma.userSession.findUnique({
+      where: { id: s.id },
+      select: { contactsSyncedAt: true },
+    });
+    const age = row?.contactsSyncedAt ? Date.now() - row.contactsSyncedAt.getTime() : Number.POSITIVE_INFINITY;
+    if (age < ADDRESS_BOOK_MAX_AGE_MS) {
+      console.log(
+        `[session:${s.id}] using saved contacts (last synced ${Math.round(age / 60_000)} min ago); live changes still apply`,
+      );
+      this.scheduleAddressBookSync(s, sock, ADDRESS_BOOK_MAX_AGE_MS - age);
+    } else {
+      this.scheduleAddressBookSync(s, sock, ADDRESS_BOOK_SYNC_DELAY_MS);
+    }
+  }
+
+  private scheduleAddressBookSync(s: ManagedSession, sock: WASocket, delayMs: number): void {
+    const timer = setTimeout(() => {
+      // Stop the cycle once this socket is replaced or closed; the next 'open' plans a new one.
       if (s.sock !== sock || this.shuttingDown) return;
-      if (s.status !== 'connected') {
-        this.scheduleAddressBookSync(s, sock, ADDRESS_BOOK_RESYNC_INTERVAL_MS);
-        return;
-      }
-      sock
-        .resyncAppState(['critical_unblock_low'], true)
-        .then(async () => {
-          // Baileys flushes the buffered contacts.upsert events just after this resolves.
-          await sleep(1_500);
-          await this.contactSyncChains.get(s.id);
-          const count = await prisma.contact.count({ where: { sessionId: s.id } });
-          console.log(`[session:${s.id}] address book sync done — ${count} contacts saved`);
-          emitToSession(s.id, 'contacts_synced', { sessionId: s.id, count, received: 0 });
-        })
-        .catch((err: unknown) =>
-          console.warn(`[session:${s.id}] address book sync failed:`, errorMessage(err)),
-        )
-        .finally(() => this.scheduleAddressBookSync(s, sock, ADDRESS_BOOK_RESYNC_INTERVAL_MS));
+      this.syncAddressBook(s.id)
+        .catch((err: unknown) => console.warn(`[session:${s.id}] address book sync failed:`, errorMessage(err)))
+        .finally(() => this.scheduleAddressBookSync(s, sock, ADDRESS_BOOK_MAX_AGE_MS));
     }, delayMs);
+    timer.unref();
+  }
+
+  /**
+   * Pull the address book ("critical_unblock_low" app-state collection) now. The first time this
+   * downloads the full list; afterwards WhatsApp only sends what changed since the stored version.
+   * Concurrent calls share one run.
+   */
+  syncAddressBook(sessionId: string): Promise<ContactSyncState> {
+    const running = this.addressBookSyncs.get(sessionId);
+    if (running) return running;
+    const sock = this.getConnectedSocket(sessionId);
+    if (!sock) return Promise.reject(new Error('WhatsApp is not connected right now.'));
+
+    const run = (async (): Promise<ContactSyncState> => {
+      const startedAt = Date.now();
+      emitToSession(sessionId, 'contacts_sync_state', { ...(await this.contactSyncState(sessionId)), syncing: true });
+      await sock.resyncAppState(['critical_unblock_low'], true);
+      // Baileys flushes the buffered contacts.upsert events just after the call resolves;
+      // then wait for every queued database write to finish.
+      await sleep(1_000);
+      for (let chain = this.contactSyncChains.get(sessionId); chain; ) {
+        await chain;
+        const next = this.contactSyncChains.get(sessionId);
+        if (next === chain) break;
+        chain = next;
+      }
+      await prisma.userSession.update({ where: { id: sessionId }, data: { contactsSyncedAt: new Date() } });
+      const state = await this.contactSyncState(sessionId, false);
+      console.log(
+        `[session:${sessionId}] address book synced in ${((Date.now() - startedAt) / 1000).toFixed(1)}s — ${state.count} contacts`,
+      );
+      emitToSession(sessionId, 'contacts_synced', { sessionId, count: state.count, received: 0 });
+      return state;
+    })();
+
+    this.addressBookSyncs.set(sessionId, run);
+    const finish = (): void => {
+      this.addressBookSyncs.delete(sessionId);
+      this.contactSyncState(sessionId)
+        .then((state) => emitToSession(sessionId, 'contacts_sync_state', state))
+        .catch(() => undefined);
+    };
+    run.then(finish, finish);
+    return run;
+  }
+
+  /** What the Contacts page shows: how many are saved, when they were last synced, and whether a sync is running. */
+  async contactSyncState(sessionId: string, syncing = this.addressBookSyncs.has(sessionId)): Promise<ContactSyncState> {
+    const [row, count] = await Promise.all([
+      prisma.userSession.findUnique({ where: { id: sessionId }, select: { contactsSyncedAt: true } }),
+      prisma.contact.count({ where: { sessionId } }),
+    ]);
+    return {
+      sessionId,
+      syncing,
+      syncedAt: row?.contactsSyncedAt ? row.contactsSyncedAt.toISOString() : null,
+      count,
+    };
   }
 
   private isActive(sessionId: string): boolean {
@@ -528,39 +587,52 @@ export class SessionManager {
     const rows = [...merged.entries()];
     /** Saved (named) contacts that are new to us, or just got an address-book name. */
     const newlySaved: string[] = [];
+    let created = 0;
+    let updated = 0;
     for (let i = 0; i < rows.length; i += CONTACT_CHUNK_SIZE) {
       const chunk = rows.slice(i, i + CONTACT_CHUNK_SIZE);
-      const before = await prisma.contact.findMany({
-        where: { sessionId, jid: { in: chunk.map(([jid]) => jid) } },
-        select: { jid: true, name: true },
-      });
-      const hadName = new Map(before.map((c) => [c.jid, c.name !== null]));
-      for (const [jid, info] of chunk) {
-        if (info.name && hadName.get(jid) !== true) newlySaved.push(jid);
-      }
-      await prisma.$transaction(
-        chunk.map(([jid, info]) =>
-          prisma.contact.upsert({
-            where: { sessionId_jid: { sessionId, jid } },
-            create: {
-              sessionId,
-              jid,
-              phone: jidToPhone(jid),
-              name: info.name,
-              pushName: info.pushName,
-            },
-            // Never overwrite a known name with an empty one.
-            update: {
-              ...(info.name ? { name: info.name } : {}),
-              ...(info.pushName ? { pushName: info.pushName } : {}),
-            },
-          }),
-        ),
+      const stored = new Map(
+        (
+          await prisma.contact.findMany({
+            where: { sessionId, jid: { in: chunk.map(([jid]) => jid) } },
+            select: { id: true, jid: true, name: true, pushName: true },
+          })
+        ).map((c) => [c.jid, c]),
       );
+
+      const toCreate: Array<{ sessionId: string; jid: string; phone: string; name: string | null; pushName: string | null }> = [];
+      const toUpdate: Array<{ id: string; data: { name?: string; pushName?: string } }> = [];
+      for (const [jid, info] of chunk) {
+        const existing = stored.get(jid);
+        if (!existing) {
+          toCreate.push({ sessionId, jid, phone: jidToPhone(jid), name: info.name, pushName: info.pushName });
+          if (info.name) newlySaved.push(jid);
+          continue;
+        }
+        // Only touch rows whose names actually changed, and never blank out a known name.
+        const data: { name?: string; pushName?: string } = {};
+        if (info.name && info.name !== existing.name) data.name = info.name;
+        if (info.pushName && info.pushName !== existing.pushName) data.pushName = info.pushName;
+        if (data.name !== undefined || data.pushName !== undefined) toUpdate.push({ id: existing.id, data });
+        if (info.name && existing.name === null) newlySaved.push(jid);
+      }
+
+      if (toCreate.length > 0) {
+        await prisma.contact.createMany({ data: toCreate });
+        created += toCreate.length;
+      }
+      if (toUpdate.length > 0) {
+        await prisma.$transaction(toUpdate.map((u) => prisma.contact.update({ where: { id: u.id }, data: u.data })));
+        updated += toUpdate.length;
+      }
     }
 
     await this.addToAutoGroups(sessionId, newlySaved);
 
+    if (created + updated === 0) return; // nothing changed — don't make every browser reload the list
+    if (rows.length > 20) {
+      console.log(`[session:${sessionId}] contacts: ${created} new, ${updated} updated, ${rows.length - created - updated} unchanged`);
+    }
     const count = await prisma.contact.count({ where: { sessionId } });
     emitToSession(sessionId, 'contacts_synced', { sessionId, count, received: merged.size });
   }

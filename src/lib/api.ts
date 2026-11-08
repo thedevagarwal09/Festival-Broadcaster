@@ -1,4 +1,11 @@
-import type { CampaignDTO, CampaignDetailResponse, ContactDTO, GroupDTO, SessionSnapshot } from './types';
+import type {
+  CampaignDTO,
+  CampaignDetailResponse,
+  ContactDTO,
+  ContactSyncState,
+  GroupDTO,
+  SessionSnapshot,
+} from './types';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { cache: 'no-store', ...init });
@@ -20,6 +27,19 @@ export const api = {
   logout: (sessionId: string) => request<{ ok: true }>(`${base(sessionId)}/logout`, { method: 'POST' }),
 
   contacts: (sessionId: string) => request<ContactDTO[]>(`${base(sessionId)}/contacts`),
+  contactSyncState: (sessionId: string) => request<ContactSyncState>(`${base(sessionId)}/contacts/sync`),
+  syncContactsNow: (sessionId: string) =>
+    request<ContactSyncState>(`${base(sessionId)}/contacts/sync`, { method: 'POST' }),
+
+  /** Add contacts to a group, or remove them from it. */
+  groupMembers: (sessionId: string, groupId: string, action: 'add' | 'remove', contactIds: string[]) =>
+    request<GroupDTO>(`${base(sessionId)}/groups/${groupId}/members`, json('POST', { action, contactIds })),
+  /** Move contacts from one group to another (only those actually in the source group move). */
+  moveContacts: (sessionId: string, fromGroupId: string, toGroupId: string, contactIds: string[]) =>
+    request<{ moved: number; from: GroupDTO; to: GroupDTO }>(
+      `${base(sessionId)}/groups/move`,
+      json('POST', { fromGroupId, toGroupId, contactIds }),
+    ),
 
   groups: (sessionId: string) => request<GroupDTO[]>(`${base(sessionId)}/groups`),
   createGroup: (sessionId: string, name: string, contactIds: string[], autoAddNew: boolean) =>

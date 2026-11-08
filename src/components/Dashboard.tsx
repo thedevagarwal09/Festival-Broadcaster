@@ -7,7 +7,7 @@ import { ContactsManager } from './ContactsManager';
 import { LiveTerminal } from './LiveTerminal';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
-import type { CampaignDTO, ContactDTO, GroupDTO, SessionSnapshot } from '@/lib/types';
+import type { CampaignDTO, ContactDTO, ContactSyncState, GroupDTO, SessionSnapshot } from '@/lib/types';
 
 type Tab = 'contacts' | 'compose' | 'live';
 
@@ -43,6 +43,7 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
   const [loadingContacts, setLoadingContacts] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [syncState, setSyncState] = useState<ContactSyncState | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -61,6 +62,19 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
     setGroups(await api.groups(sessionId));
   }, [sessionId]);
 
+  const loadSyncState = useCallback(async () => {
+    setSyncState(await api.contactSyncState(sessionId));
+  }, [sessionId]);
+
+  const syncNow = useCallback(async () => {
+    setSyncState((prev) => (prev ? { ...prev, syncing: true } : prev));
+    try {
+      setSyncState(await api.syncContactsNow(sessionId));
+    } finally {
+      loadSyncState().catch(() => undefined);
+    }
+  }, [sessionId, loadSyncState]);
+
   const loadCampaigns = useCallback(async () => {
     const list = await api.campaigns(sessionId);
     setCampaigns(list);
@@ -77,7 +91,8 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
     void loadContacts();
     loadGroups().catch(() => undefined);
     loadCampaigns().catch(() => undefined);
-  }, [loadContacts, loadGroups, loadCampaigns]);
+    loadSyncState().catch(() => undefined);
+  }, [loadContacts, loadGroups, loadCampaigns, loadSyncState]);
 
   useEffect(() => {
     const socket = getSocket();
@@ -89,6 +104,7 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
       reloadTimer.current = setTimeout(() => {
         void loadContacts();
         loadGroups().catch(() => undefined);
+        loadSyncState().catch(() => undefined);
       }, 1200);
     };
     const onProgress = (campaign: CampaignDTO) => {
@@ -98,14 +114,19 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
         return exists ? prev.map((c) => (c.id === campaign.id ? campaign : c)) : [campaign, ...prev];
       });
     };
+    const onSyncState = (state: ContactSyncState) => {
+      if (state.sessionId === sessionId) setSyncState(state);
+    };
     socket.on('contacts_synced', onContactsSynced);
+    socket.on('contacts_sync_state', onSyncState);
     socket.on('campaign_progress', onProgress);
     return () => {
       socket.off('contacts_synced', onContactsSynced);
+      socket.off('contacts_sync_state', onSyncState);
       socket.off('campaign_progress', onProgress);
       if (reloadTimer.current) clearTimeout(reloadTimer.current);
     };
-  }, [sessionId, loadContacts, loadGroups]);
+  }, [sessionId, loadContacts, loadGroups, loadSyncState]);
 
   const handleCampaignCreated = useCallback((campaign: CampaignDTO) => {
     setCampaigns((prev) => [campaign, ...prev.filter((c) => c.id !== campaign.id)]);
@@ -207,7 +228,9 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
             contacts={contacts}
             groups={groups}
             loading={loadingContacts}
-            onRefresh={() => void reloadGroupsAndContacts()}
+            syncState={syncState}
+            connected={connected}
+            onSyncNow={syncNow}
             onGroupsChanged={reloadGroupsAndContacts}
           />
         )}

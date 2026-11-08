@@ -84,10 +84,13 @@ Then open <http://localhost:3000>:
 
 1. **Link WhatsApp.** On your phone, go to WhatsApp → Settings → Linked devices → Link a device, and scan the QR
    code. A new code appears about every 20 s. If the codes run out, click "Generate new code".
-2. **Wait for contacts.** WhatsApp sends your contacts in bursts after linking. This can take from a few seconds
-   to a few minutes, and the list fills in by itself.
+2. **Wait for contacts.** Right after linking, the app pulls your address book once, which usually
+   takes a few seconds. Chats and messages are never downloaded. Contacts are stored on the server,
+   so later restarts don't sync again, and new contacts you save on your phone appear by themselves.
+   *Sync now* on the Contacts page pulls changes on demand.
 3. **Build groups.** Open *Contacts & Groups*, tick contacts, name the group (for example "Diwali - Family") and
-   save it.
+   save it. To reorganise, open a group, tick contacts and use *Move* (to another group), *Add*
+   (also put them in another group) or *Remove*.
 4. **Compose.** Pick a group and write the message with spintax and `{{name}}`. You can attach an image or
    video, then click *Review & send*.
 5. **Watch it run.** *Live Dispatch* shows the progress bar and the live log, with Pause, Resume and Abort.
@@ -157,9 +160,17 @@ docker run --rm -v festival-broadcaster_festival-data:/data -v "$PWD":/backup bu
 - Auth state is stored with `useMultiFileAuthState` in `./sessions/{sessionId}/`. On server boot, every session
   that has finished pairing reconnects without a new QR scan.
 - QR strings become base64 PNG data URLs (`qrcode`) and are pushed as `qr_code` events.
-- On `connection === 'open'` the server emits `session_connected`. Contacts from `contacts.upsert`,
-  `contacts.update` and `messaging-history.set` are upserted into SQLite. A real name is never overwritten
-  with an empty one.
+- On `connection === 'open'` the server emits `session_connected`.
+- **Contacts, not messages.** History sync is turned off: only the small `PUSH_NAME` list (profile
+  names) is accepted, so no chats or messages are downloaded or decrypted, and reconnects skip
+  Baileys' 20-second wait for history. The address book (the `critical_unblock_low` app-state
+  collection) is pulled directly.
+- **Stored, not re-synced.** Contacts live in SQLite, and the time of the last address-book pull is
+  saved (`UserSession.contactsSyncedAt`). On reconnect the pull is skipped if it's under 6 hours old.
+  New or edited contacts still arrive live through WhatsApp's `server_sync` push, and later pulls only
+  fetch what changed since the stored version.
+- Only new or changed contacts are written, so a full re-sync of ~1,800 unchanged contacts is a few
+  read queries. A real name is never overwritten with an empty one.
 - Transient drops reconnect with exponential backoff (1 s up to 30 s). `restartRequired`, which WhatsApp sends
   right after a scan, reconnects at once. `loggedOut` wipes the auth folder, pauses running campaigns and sends
   the browser back to a fresh QR. `connectionReplaced` stops instead of fighting the other client.

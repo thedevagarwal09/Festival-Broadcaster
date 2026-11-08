@@ -2,7 +2,10 @@
 
 import { useMemo, useState } from 'react';
 import {
+  ArrowRightLeft,
   Check,
+  FolderMinus,
+  FolderPlus,
   Loader2,
   Pencil,
   Plus,
@@ -16,15 +19,19 @@ import {
   Zap,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { contactDisplayName, initials } from '@/lib/format';
-import type { ContactDTO, GroupDTO } from '@/lib/types';
+import { contactDisplayName, formatRelative, initials } from '@/lib/format';
+import type { ContactDTO, ContactSyncState, GroupDTO } from '@/lib/types';
 
 interface ContactsManagerProps {
   sessionId: string;
   contacts: ContactDTO[];
   groups: GroupDTO[];
   loading: boolean;
-  onRefresh: () => void;
+  /** Saved count, last address-book sync and whether a sync is running. */
+  syncState: ContactSyncState | null;
+  /** WhatsApp is connected, so "Sync now" can run. */
+  connected: boolean;
+  onSyncNow: () => Promise<void>;
   onGroupsChanged: () => Promise<void>;
 }
 
@@ -38,7 +45,9 @@ export function ContactsManager({
   contacts,
   groups,
   loading,
-  onRefresh,
+  syncState,
+  connected,
+  onSyncNow,
   onGroupsChanged,
 }: ContactsManagerProps) {
   const [query, setQuery] = useState('');
@@ -50,6 +59,10 @@ export function ContactsManager({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [limit, setLimit] = useState(PAGE_SIZE);
+  const [targetGroupId, setTargetGroupId] = useState('');
+  const [bulkBusy, setBulkBusy] = useState<'move' | 'add' | 'remove' | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [bulkMessage, setBulkMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -69,6 +82,50 @@ export function ContactsManager({
   const visible = filtered.slice(0, limit);
   const allFilteredSelected = filtered.length > 0 && filtered.every((c) => selected.has(c.id));
   const editingGroup = groups.find((g) => g.id === editingId) ?? null;
+  /** The group whose members are being shown — the source for "Move" and "Remove". */
+  const viewingGroup = filter.startsWith('group:') ? (groups.find((g) => g.id === filter.slice(6)) ?? null) : null;
+
+  const runBulk = async (action: 'move' | 'add' | 'remove') => {
+    const ids = [...selected];
+    const target = groups.find((g) => g.id === targetGroupId) ?? null;
+    if (ids.length === 0) return;
+    if ((action === 'move' || action === 'add') && !target) return;
+    if ((action === 'move' || action === 'remove') && !viewingGroup) return;
+    setBulkBusy(action);
+    setBulkMessage(null);
+    try {
+      if (action === 'move' && viewingGroup && target) {
+        const result = await api.moveContacts(sessionId, viewingGroup.id, target.id, ids);
+        setBulkMessage({
+          kind: 'ok',
+          text: `Moved ${result.moved} contact${result.moved === 1 ? '' : 's'} from “${viewingGroup.name}” to “${target.name}”.`,
+        });
+      } else if (action === 'add' && target) {
+        const already = new Set(target.contactIds);
+        const added = ids.filter((id) => !already.has(id)).length;
+        await api.groupMembers(sessionId, target.id, 'add', ids);
+        setBulkMessage({
+          kind: 'ok',
+          text:
+            added === 0
+              ? `All selected contacts were already in “${target.name}”.`
+              : `Added ${added} contact${added === 1 ? '' : 's'} to “${target.name}”.`,
+        });
+      } else if (action === 'remove' && viewingGroup) {
+        await api.groupMembers(sessionId, viewingGroup.id, 'remove', ids);
+        setBulkMessage({
+          kind: 'ok',
+          text: `Removed ${ids.length} contact${ids.length === 1 ? '' : 's'} from “${viewingGroup.name}”.`,
+        });
+      }
+      setSelected(new Set());
+      await onGroupsChanged();
+    } catch (err) {
+      setBulkMessage({ kind: 'error', text: err instanceof Error ? err.message : 'That didn’t work. Try again.' });
+    } finally {
+      setBulkBusy(null);
+    }
+  };
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -311,10 +368,117 @@ export function ContactsManager({
               </option>
             ))}
           </select>
-          <button type="button" className="btn-secondary" onClick={onRefresh} title="Reload">
-            <RefreshCw className="h-4 w-4" />
+        </div>
+
+        {/* Sync status: contacts are stored on the server; this only pulls changes. */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 bg-stone-50/60 px-4 py-2 text-xs text-stone-500">
+          <span>
+            {syncState?.syncing ? (
+              <span className="inline-flex items-center gap-1.5 text-diya-700">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Syncing address book from WhatsApp…
+              </span>
+            ) : syncState?.syncedAt ? (
+              <>
+                <strong className="text-stone-700">{syncState.count.toLocaleString()}</strong> contacts saved · last
+                synced {formatRelative(syncState.syncedAt)} · new contacts on your phone appear automatically
+              </>
+            ) : (
+              <>
+                <strong className="text-stone-700">{contacts.length.toLocaleString()}</strong> contacts saved · address
+                book not synced yet
+              </>
+            )}
+            {syncError && <span className="ml-2 text-rose-600">{syncError}</span>}
+          </span>
+          <button
+            type="button"
+            className="btn-ghost px-2 py-1 text-xs"
+            disabled={!connected || syncState?.syncing === true}
+            title={connected ? 'Pull changes from your phone’s address book now' : 'Connect WhatsApp first'}
+            onClick={() => {
+              setSyncError(null);
+              onSyncNow().catch((err: unknown) =>
+                setSyncError(err instanceof Error ? err.message : 'Sync failed.'),
+              );
+            }}
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${syncState?.syncing ? 'animate-spin' : ''}`} /> Sync now
           </button>
         </div>
+
+        {bulkMessage && (
+          <div
+            className={`flex items-center justify-between gap-2 border-b px-4 py-2 text-sm ${
+              bulkMessage.kind === 'ok' ? 'border-emerald-100 bg-emerald-50 text-emerald-800' : 'border-rose-100 bg-rose-50 text-rose-700'
+            }`}
+            role="status"
+          >
+            <span>{bulkMessage.text}</span>
+            <button type="button" className="btn-ghost p-1" onClick={() => setBulkMessage(null)} aria-label="Dismiss">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Bulk actions on the selected contacts (hidden while editing a group on the left). */}
+        {selected.size > 0 && !editingGroup && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-diya-100 bg-diya-50/70 px-4 py-2.5 text-sm">
+            <span className="font-medium text-stone-800">{selected.size} selected</span>
+            <select
+              className="input w-auto py-1.5 text-sm"
+              value={targetGroupId}
+              onChange={(e) => setTargetGroupId(e.target.value)}
+              aria-label="Target group"
+            >
+              <option value="">Choose a group…</option>
+              {groups
+                .filter((g) => g.id !== viewingGroup?.id)
+                .map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name} ({g.contactIds.length})
+                  </option>
+                ))}
+            </select>
+            {viewingGroup && (
+              <button
+                type="button"
+                className="btn-primary py-1.5"
+                disabled={!targetGroupId || bulkBusy !== null}
+                onClick={() => void runBulk('move')}
+                title={`Take the selected contacts out of “${viewingGroup.name}” and put them in the chosen group`}
+              >
+                {bulkBusy === 'move' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRightLeft className="h-4 w-4" />}
+                Move
+              </button>
+            )}
+            <button
+              type="button"
+              className={viewingGroup ? 'btn-secondary py-1.5' : 'btn-primary py-1.5'}
+              disabled={!targetGroupId || bulkBusy !== null}
+              onClick={() => void runBulk('add')}
+              title="Add the selected contacts to the chosen group (they stay in their other groups)"
+            >
+              {bulkBusy === 'add' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderPlus className="h-4 w-4" />}
+              Add
+            </button>
+            {viewingGroup && (
+              <button
+                type="button"
+                className="btn-ghost py-1.5 text-rose-600 hover:bg-rose-50"
+                disabled={bulkBusy !== null}
+                onClick={() => void runBulk('remove')}
+              >
+                {bulkBusy === 'remove' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderMinus className="h-4 w-4" />}
+                Remove from “{viewingGroup.name}”
+              </button>
+            )}
+            {!viewingGroup && groups.length > 1 && (
+              <span className="text-xs text-stone-500">
+                To move contacts, open a group first (click it on the left).
+              </span>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center justify-between border-b border-stone-100 px-4 py-2 text-xs text-stone-500">
           <label className="flex cursor-pointer items-center gap-2">
