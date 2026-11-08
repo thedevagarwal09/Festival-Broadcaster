@@ -1,0 +1,47 @@
+{
+  "name": "festival-broadcaster",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Free, self-hosted WhatsApp festival greeting broadcaster (Baileys + Next.js + SQLite)",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "tsx server/index.ts",
+    "build": "prisma generate && next build",
+    "start": "NODE_ENV=production tsx server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@prisma/client": "^5.22.0",
+    "@whiskeysockets/baileys": "^6.7.16",
+    "express": "^4.21.1",
+    "lucide-react": "^0.460.0",
+    "multer": "^2.0.1",
+    "next": "16.4.3",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^20.17.6",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "prisma": "^5.22.0",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3"
+  }
+}

@@ -1,0 +1,104 @@
+// Shared types used by both the Node server and the Next.js client.
+
+export type SessionStatus =
+  | 'idle' // no socket open (e.g. QR expired with nobody watching)
+  | 'connecting' // opening the WhatsApp Web socket
+  | 'qr' // waiting for the user to scan the QR code
+  | 'connected' // paired and online
+  | 'reconnecting' // transient drop, retrying with backoff
+  | 'conflict' // the same account was opened by another client
+  | 'logged_out'; // unlinked from the phone or by the user
+
+export interface SessionUser {
+  jid: string;
+  phoneNumber: string;
+  name: string | null;
+}
+
+export interface SessionSnapshot {
+  sessionId: string;
+  status: SessionStatus;
+  user: SessionUser | null;
+  qr: string | null;
+  qrAttempt: number;
+}
+
+export type CampaignStatus = 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'ABORTED';
+export type QueueStatus = 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELLED';
+export type MediaType = 'image' | 'video';
+
+export interface ContactDTO {
+  id: string;
+  jid: string;
+  name: string | null;
+  pushName: string | null;
+  phone: string;
+  groupIds: string[];
+}
+
+export interface GroupDTO {
+  id: string;
+  name: string;
+  contactIds: string[];
+  /** New address-book contacts are added to this group automatically. */
+  autoAddNew: boolean;
+  createdAt: string;
+}
+
+export interface CampaignDTO {
+  id: string;
+  sessionId: string;
+  groupId: string | null;
+  groupName: string | null;
+  name: string;
+  messageTemplate: string;
+  mediaPath: string | null;
+  mediaType: MediaType | null;
+  status: CampaignStatus;
+  totalRecipients: number;
+  sentCount: number;
+  failedCount: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export type LogLevel = 'info' | 'warn' | 'processing' | 'sent' | 'failed';
+
+export interface CampaignLogEntry {
+  id: string;
+  campaignId: string;
+  timestamp: string;
+  level: LogLevel;
+  recipientName: string | null;
+  recipientJid: string | null;
+  message: string;
+}
+
+export interface CampaignDetailResponse {
+  campaign: CampaignDTO;
+  logs: CampaignLogEntry[];
+}
+
+export interface ServerToClientEvents {
+  qr_code: (payload: { sessionId: string; qr: string; attempt: number }) => void;
+  session_status: (payload: SessionSnapshot) => void;
+  session_connected: (payload: SessionUser & { sessionId: string }) => void;
+  session_logged_out: (payload: { sessionId: string; reason: string }) => void;
+  session_error: (payload: { message: string }) => void;
+  contacts_synced: (payload: { sessionId: string; count: number; received: number }) => void;
+  campaign_progress: (payload: CampaignDTO) => void;
+  campaign_log: (payload: CampaignLogEntry) => void;
+}
+
+export interface ClientToServerEvents {
+  init_session: (payload: { sessionId: string }) => void;
+  refresh_qr: (payload: { sessionId: string }) => void;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Session IDs become folder names on disk, so they must be strict UUIDs. */
+export function isValidSessionId(value: unknown): value is string {
+  return typeof value === 'string' && UUID_RE.test(value);
+}
