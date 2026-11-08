@@ -292,7 +292,7 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
             {error && <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-stone-800 bg-stone-950 shadow-lg">
+          <div className="palette-light overflow-hidden rounded-2xl border border-stone-800 bg-stone-950 shadow-lg">
             <div className="flex items-center justify-between border-b border-stone-800 px-4 py-2">
               <div className="flex items-center gap-2">
                 <span className="h-3 w-3 rounded-full bg-rose-500" />

@@ -80,12 +80,12 @@ export function SummaryModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/50 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="summary-title"
     >
-      <div className="card max-h-[90vh] w-full max-w-lg overflow-y-auto bg-white p-6 shadow-xl">
+      <div className="card max-h-[90vh] w-full max-w-lg overflow-y-auto bg-surface p-6 shadow-xl">
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h2 id="summary-title" className="text-lg font-bold text-stone-900">
@@ -153,7 +153,7 @@ export function SummaryModal({
           <ul className="list-disc space-y-1 pl-5">
             <li>Automating a personal account is against WhatsApp&apos;s Terms; pacing reduces risk but cannot remove it.</li>
             <li>Only message people who know you — reports and blocks are the biggest ban trigger.</li>
-            <li>Keep this computer awake and the server running until the campaign finishes.</li>
+            <li>Keep the server running until the campaign finishes (if it runs on a laptop, keep the laptop awake).</li>
             <li>Your phone can stay offline; linked devices send on their own.</li>
           </ul>
         </div>
@@ -161,7 +161,7 @@ export function SummaryModal({
         {preview && (
           <div className="mt-4">
             <p className="mb-1 text-xs font-medium text-stone-500">Sample message</p>
-            <p className="max-h-32 overflow-y-auto whitespace-pre-wrap rounded-xl bg-[#d9fdd3] p-3 text-sm text-stone-800">
+            <p className="palette-light max-h-32 overflow-y-auto whitespace-pre-wrap rounded-xl bg-[#d9fdd3] p-3 text-sm text-stone-800">
               {preview}
             </p>
           </div>

@@ -2,6 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 import { Loader2, QrCode, RefreshCw, ShieldCheck, Smartphone, WifiOff } from 'lucide-react';
+import { ThemeToggle } from './ThemeToggle';
 import type { SessionSnapshot } from '@/lib/types';
 
 interface QrLoginProps {
@@ -23,9 +24,10 @@ export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh }: QrL
   const waiting = !qr && !expired;
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-6">
+    <main className="relative flex min-h-screen items-center justify-center p-6 pt-20 md:pt-6">
+      <ThemeToggle className="absolute right-4 top-4 md:right-6 md:top-6" />
       <div className="card grid w-full max-w-4xl overflow-hidden md:grid-cols-2">
-        <section className="flex flex-col justify-between bg-gradient-to-br from-diya-500 via-diya-600 to-rose-600 p-8 text-white">
+        <section className="palette-light flex flex-col justify-between bg-gradient-to-br from-diya-500 via-diya-600 to-rose-600 p-8 text-white">
           <div>
             <div className="mb-6 flex items-center gap-2 text-diya-100">
               <span className="text-2xl">🪔</span>
@@ -33,7 +35,7 @@ export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh }: QrL
             </div>
             <h1 className="text-3xl font-bold leading-tight">Send warm festival wishes to everyone you love.</h1>
             <p className="mt-3 text-diya-100">
-              Link your WhatsApp once. Everything runs on this computer — no paid APIs, no cloud.
+              Link your WhatsApp once. It runs on your own server — no paid APIs, no third-party cloud.
             </p>
           </div>
           <ol className="mt-10 space-y-4">
@@ -47,12 +49,12 @@ export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh }: QrL
             ))}
           </ol>
           <p className="mt-10 flex items-center gap-2 text-xs text-diya-100">
-            <ShieldCheck className="h-4 w-4" /> Credentials are stored only in ./sessions on this machine.
+            <ShieldCheck className="h-4 w-4" /> Your WhatsApp login stays on your server.
           </p>
         </section>
 
         <section className="flex flex-col items-center justify-center gap-5 p-8">
-          <div className="relative flex h-72 w-72 items-center justify-center rounded-2xl border-2 border-dashed border-stone-200 bg-white">
+          <div className="palette-light relative flex h-72 w-72 items-center justify-center rounded-2xl border-2 border-dashed border-stone-200 bg-white">
             {qr && !expired && <img src={qr.qr} alt="WhatsApp pairing QR code" className="h-64 w-64 rounded-lg" />}
             {waiting && (
               <div className="flex flex-col items-center gap-3 text-stone-500">
@@ -93,7 +95,7 @@ export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh }: QrL
 
           {!socketConnected && (
             <p className="flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">
-              <WifiOff className="h-4 w-4" /> Lost connection to the local server — retrying…
+              <WifiOff className="h-4 w-4" /> Lost connection to the server — reconnecting…
             </p>
           )}
           {error && <p className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</p>}

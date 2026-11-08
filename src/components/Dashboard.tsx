@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, LogOut, RefreshCw, Send, Terminal, Users, Wifi, WifiOff } from 'lucide-react';
 import { BroadcastComposer } from './BroadcastComposer';
+import { ThemeToggle } from './ThemeToggle';
 import { ContactsManager } from './ContactsManager';
 import { LiveTerminal } from './LiveTerminal';
 import { api } from '@/lib/api';
@@ -169,11 +170,12 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
         <div className="flex items-center gap-3">
           <span
             className={`chip ${connected ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}
-            title={socketConnected ? undefined : 'Browser lost its connection to the local server'}
+            title={socketConnected ? undefined : 'Browser lost its connection to the server'}
           >
             {connected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
             {socketConnected ? STATUS_LABEL[snapshot.status] : 'Server offline'}
           </span>
+          <ThemeToggle />
           <button
             type="button"
             className="btn-secondary"
@@ -207,7 +209,7 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
             type="button"
             onClick={() => setTab(id)}
             className={`btn whitespace-nowrap ${
-              tab === id ? 'bg-stone-900 text-white shadow' : 'bg-white/70 text-stone-600 hover:bg-white'
+              tab === id ? 'bg-stone-900 text-stone-50 shadow' : 'bg-surface/70 text-stone-600 hover:bg-surface'
             }`}
           >
             <Icon className="h-4 w-4" /> {label}

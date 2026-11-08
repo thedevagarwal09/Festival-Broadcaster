@@ -289,7 +289,7 @@ export function BroadcastComposer({
             </div>
             <textarea
               ref={textareaRef}
-              className="block min-h-[240px] w-full resize-y border-0 bg-white px-4 py-3 font-mono text-sm leading-relaxed outline-none"
+              className="block min-h-[240px] w-full resize-y border-0 bg-surface px-4 py-3 font-mono text-sm leading-relaxed outline-none"
               value={template}
               maxLength={MAX_TEMPLATE}
               onChange={(e) => setTemplate(e.target.value)}
@@ -318,7 +318,7 @@ export function BroadcastComposer({
               <button
                 key={s.label}
                 type="button"
-                className="chip bg-white text-violet-700 ring-1 ring-violet-200 hover:bg-violet-100"
+                className="chip bg-surface text-violet-700 ring-1 ring-violet-200 hover:bg-violet-100"
                 onClick={() => insertAtCursor(s.text)}
               >
                 + {s.label}
@@ -380,7 +380,7 @@ export function BroadcastComposer({
               <Shuffle className="h-3.5 w-3.5" /> Shuffle
             </button>
           </div>
-          <div className="rounded-2xl bg-[#e7ddd3] p-4">
+          <div className="palette-light rounded-2xl bg-[#e7ddd3] p-4">
             <div className="ml-auto max-w-[95%] rounded-xl rounded-tr-sm bg-[#d9fdd3] p-2 shadow-sm">
               {previewUrl &&
                 (isVideo ? (

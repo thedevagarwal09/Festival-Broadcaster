@@ -2,17 +2,269 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Theme. Every Tailwind colour used by the app reads from these variables, so the whole UI
+ * switches between light and dark by toggling the "dark" class on <html> (see ThemeToggle).
+ */
 :root {
   color-scheme: light;
+  --stone-50: 250 250 249;
+  --stone-100: 245 245 244;
+  --stone-200: 231 229 228;
+  --stone-300: 214 211 209;
+  --stone-400: 168 162 158;
+  --stone-500: 120 113 108;
+  --stone-600: 87 83 78;
+  --stone-700: 68 64 60;
+  --stone-800: 41 37 36;
+  --stone-900: 28 25 23;
+  --stone-950: 12 10 9;
+  --diya-50: 255 248 235;
+  --diya-100: 255 234 198;
+  --diya-200: 255 211 136;
+  --diya-300: 255 182 74;
+  --diya-400: 255 154 32;
+  --diya-500: 249 119 7;
+  --diya-600: 221 83 2;
+  --diya-700: 183 55 6;
+  --diya-800: 148 41 12;
+  --diya-900: 122 35 13;
+  --diya-950: 70 16 4;
+  --rose-50: 255 241 242;
+  --rose-100: 255 228 230;
+  --rose-200: 254 205 211;
+  --rose-300: 253 164 175;
+  --rose-400: 251 113 133;
+  --rose-500: 244 63 94;
+  --rose-600: 225 29 72;
+  --rose-700: 190 18 60;
+  --rose-800: 159 18 57;
+  --rose-900: 136 19 55;
+  --rose-950: 76 5 25;
+  --emerald-50: 236 253 245;
+  --emerald-100: 209 250 229;
+  --emerald-200: 167 243 208;
+  --emerald-300: 110 231 183;
+  --emerald-400: 52 211 153;
+  --emerald-500: 16 185 129;
+  --emerald-600: 5 150 105;
+  --emerald-700: 4 120 87;
+  --emerald-800: 6 95 70;
+  --emerald-900: 6 78 59;
+  --emerald-950: 2 44 34;
+  --amber-50: 255 251 235;
+  --amber-100: 254 243 199;
+  --amber-200: 253 230 138;
+  --amber-300: 252 211 77;
+  --amber-400: 251 191 36;
+  --amber-500: 245 158 11;
+  --amber-600: 217 119 6;
+  --amber-700: 180 83 9;
+  --amber-800: 146 64 14;
+  --amber-900: 120 53 15;
+  --amber-950: 69 26 3;
+  --sky-50: 240 249 255;
+  --sky-100: 224 242 254;
+  --sky-200: 186 230 253;
+  --sky-300: 125 211 252;
+  --sky-400: 56 189 248;
+  --sky-500: 14 165 233;
+  --sky-600: 2 132 199;
+  --sky-700: 3 105 161;
+  --sky-800: 7 89 133;
+  --sky-900: 12 74 110;
+  --sky-950: 8 47 73;
+  --violet-50: 245 243 255;
+  --violet-100: 237 233 254;
+  --violet-200: 221 214 254;
+  --violet-300: 196 181 253;
+  --violet-400: 167 139 250;
+  --violet-500: 139 92 246;
+  --violet-600: 124 58 237;
+  --violet-700: 109 40 217;
+  --violet-800: 91 33 182;
+  --violet-900: 76 29 149;
+  --violet-950: 46 16 101;
+  --surface: 255 255 255;
+  --page-bg: linear-gradient(135deg, #fff8eb 0%, #ffffff 50%, #fff1f2 100%);
+}
+
+:root.dark {
+  color-scheme: dark;
+  --stone-50: 37 33 30;
+  --stone-100: 46 41 38;
+  --stone-200: 59 53 50;
+  --stone-300: 75 69 65;
+  --stone-400: 138 131 126;
+  --stone-500: 163 156 151;
+  --stone-600: 189 182 177;
+  --stone-700: 212 206 201;
+  --stone-800: 231 226 222;
+  --stone-900: 244 241 238;
+  --stone-950: 250 249 248;
+  --diya-50: 70 16 4;
+  --diya-100: 122 35 13;
+  --diya-200: 148 41 12;
+  --diya-300: 183 55 6;
+  --diya-400: 255 154 32;
+  --diya-500: 249 119 7;
+  --diya-600: 249 119 7;
+  --diya-700: 255 182 74;
+  --diya-800: 255 211 136;
+  --diya-900: 255 234 198;
+  --diya-950: 255 248 235;
+  --rose-50: 76 5 25;
+  --rose-100: 136 19 55;
+  --rose-200: 159 18 57;
+  --rose-300: 190 18 60;
+  --rose-400: 251 113 133;
+  --rose-500: 244 63 94;
+  --rose-600: 244 63 94;
+  --rose-700: 253 164 175;
+  --rose-800: 254 205 211;
+  --rose-900: 255 228 230;
+  --rose-950: 255 241 242;
+  --emerald-50: 2 44 34;
+  --emerald-100: 6 78 59;
+  --emerald-200: 6 95 70;
+  --emerald-300: 4 120 87;
+  --emerald-400: 52 211 153;
+  --emerald-500: 16 185 129;
+  --emerald-600: 16 185 129;
+  --emerald-700: 110 231 183;
+  --emerald-800: 167 243 208;
+  --emerald-900: 209 250 229;
+  --emerald-950: 236 253 245;
+  --amber-50: 69 26 3;
+  --amber-100: 120 53 15;
+  --amber-200: 146 64 14;
+  --amber-300: 180 83 9;
+  --amber-400: 251 191 36;
+  --amber-500: 245 158 11;
+  --amber-600: 245 158 11;
+  --amber-700: 252 211 77;
+  --amber-800: 253 230 138;
+  --amber-900: 254 243 199;
+  --amber-950: 255 251 235;
+  --sky-50: 8 47 73;
+  --sky-100: 12 74 110;
+  --sky-200: 7 89 133;
+  --sky-300: 3 105 161;
+  --sky-400: 56 189 248;
+  --sky-500: 14 165 233;
+  --sky-600: 14 165 233;
+  --sky-700: 125 211 252;
+  --sky-800: 186 230 253;
+  --sky-900: 224 242 254;
+  --sky-950: 240 249 255;
+  --violet-50: 46 16 101;
+  --violet-100: 76 29 149;
+  --violet-200: 91 33 182;
+  --violet-300: 109 40 217;
+  --violet-400: 167 139 250;
+  --violet-500: 139 92 246;
+  --violet-600: 139 92 246;
+  --violet-700: 196 181 253;
+  --violet-800: 221 214 254;
+  --violet-900: 237 233 254;
+  --violet-950: 245 243 255;
+  --surface: 28 25 23;
+  --page-bg: linear-gradient(135deg, #1b1411 0%, #141110 50%, #1b1215 100%);
+}
+
+/*
+ * Areas that look the same in both themes: WhatsApp-style message bubbles, the orange QR panel
+ * and the always-dark dispatch terminal. They keep the light palette even in dark mode.
+ */
+.palette-light {
+  --stone-50: 250 250 249;
+  --stone-100: 245 245 244;
+  --stone-200: 231 229 228;
+  --stone-300: 214 211 209;
+  --stone-400: 168 162 158;
+  --stone-500: 120 113 108;
+  --stone-600: 87 83 78;
+  --stone-700: 68 64 60;
+  --stone-800: 41 37 36;
+  --stone-900: 28 25 23;
+  --stone-950: 12 10 9;
+  --diya-50: 255 248 235;
+  --diya-100: 255 234 198;
+  --diya-200: 255 211 136;
+  --diya-300: 255 182 74;
+  --diya-400: 255 154 32;
+  --diya-500: 249 119 7;
+  --diya-600: 221 83 2;
+  --diya-700: 183 55 6;
+  --diya-800: 148 41 12;
+  --diya-900: 122 35 13;
+  --diya-950: 70 16 4;
+  --rose-50: 255 241 242;
+  --rose-100: 255 228 230;
+  --rose-200: 254 205 211;
+  --rose-300: 253 164 175;
+  --rose-400: 251 113 133;
+  --rose-500: 244 63 94;
+  --rose-600: 225 29 72;
+  --rose-700: 190 18 60;
+  --rose-800: 159 18 57;
+  --rose-900: 136 19 55;
+  --rose-950: 76 5 25;
+  --emerald-50: 236 253 245;
+  --emerald-100: 209 250 229;
+  --emerald-200: 167 243 208;
+  --emerald-300: 110 231 183;
+  --emerald-400: 52 211 153;
+  --emerald-500: 16 185 129;
+  --emerald-600: 5 150 105;
+  --emerald-700: 4 120 87;
+  --emerald-800: 6 95 70;
+  --emerald-900: 6 78 59;
+  --emerald-950: 2 44 34;
+  --amber-50: 255 251 235;
+  --amber-100: 254 243 199;
+  --amber-200: 253 230 138;
+  --amber-300: 252 211 77;
+  --amber-400: 251 191 36;
+  --amber-500: 245 158 11;
+  --amber-600: 217 119 6;
+  --amber-700: 180 83 9;
+  --amber-800: 146 64 14;
+  --amber-900: 120 53 15;
+  --amber-950: 69 26 3;
+  --sky-50: 240 249 255;
+  --sky-100: 224 242 254;
+  --sky-200: 186 230 253;
+  --sky-300: 125 211 252;
+  --sky-400: 56 189 248;
+  --sky-500: 14 165 233;
+  --sky-600: 2 132 199;
+  --sky-700: 3 105 161;
+  --sky-800: 7 89 133;
+  --sky-900: 12 74 110;
+  --sky-950: 8 47 73;
+  --violet-50: 245 243 255;
+  --violet-100: 237 233 254;
+  --violet-200: 221 214 254;
+  --violet-300: 196 181 253;
+  --violet-400: 167 139 250;
+  --violet-500: 139 92 246;
+  --violet-600: 124 58 237;
+  --violet-700: 109 40 217;
+  --violet-800: 91 33 182;
+  --violet-900: 76 29 149;
+  --violet-950: 46 16 101;
 }
 
 body {
-  @apply min-h-screen bg-gradient-to-br from-diya-50 via-white to-rose-50 text-stone-800 antialiased;
+  @apply min-h-screen text-stone-800 antialiased;
+  background: var(--page-bg);
+  background-attachment: fixed;
 }
 
 @layer components {
   .card {
-    @apply rounded-2xl border border-stone-200/80 bg-white/90 shadow-sm backdrop-blur;
+    @apply rounded-2xl border border-stone-200/80 bg-surface/90 shadow-sm backdrop-blur;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition
@@ -22,7 +274,7 @@ body {
     @apply btn bg-diya-500 text-white shadow-sm hover:bg-diya-600;
   }
   .btn-secondary {
-    @apply btn border border-stone-200 bg-white text-stone-700 hover:bg-stone-50;
+    @apply btn border border-stone-200 bg-surface text-stone-700 hover:bg-stone-50;
   }
   .btn-danger {
     @apply btn bg-rose-600 text-white hover:bg-rose-700;
@@ -31,10 +283,14 @@ body {
     @apply btn text-stone-600 hover:bg-stone-100;
   }
   .input {
-    @apply w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none transition
+    @apply w-full rounded-xl border border-stone-200 bg-surface px-3 py-2 text-sm outline-none transition
       placeholder:text-stone-400 focus:border-diya-400 focus:ring-2 focus:ring-diya-100;
   }
   .chip {
     @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }

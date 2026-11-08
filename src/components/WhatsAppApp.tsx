@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Dashboard } from './Dashboard';
 import { QrLogin } from './QrLogin';
+import { ThemeToggle } from './ThemeToggle';
 import { api } from '@/lib/api';
 import { getOrCreateSessionId, rotateSessionId } from '@/lib/session-id';
 import { getSocket } from '@/lib/socket';
@@ -16,6 +17,17 @@ export function WhatsAppApp() {
   const [socketConnected, setSocketConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const [slowConnect, setSlowConnect] = useState(false);
+
+  // If the live connection hasn't come up after 10 s, show a troubleshooting hint.
+  useEffect(() => {
+    if (socketConnected) {
+      setSlowConnect(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlowConnect(true), 10_000);
+    return () => clearTimeout(timer);
+  }, [socketConnected]);
 
   useEffect(() => {
     const id = getOrCreateSessionId();
@@ -98,11 +110,18 @@ export function WhatsAppApp() {
 
   if (!sessionId || !snapshot) {
     return (
-      <main className="flex min-h-screen items-center justify-center">
+      <main className="relative flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+        <ThemeToggle className="absolute right-4 top-4 md:right-6 md:top-6" />
         <div className="flex items-center gap-3 text-stone-500">
           <Loader2 className="h-5 w-5 animate-spin" />
-          {socketConnected ? 'Preparing your WhatsApp session…' : 'Connecting to local server…'}
+          {socketConnected ? 'Preparing your WhatsApp session…' : 'Connecting to the server…'}
         </div>
+        {slowConnect && !socketConnected && (
+          <p className="max-w-md text-sm text-stone-500">
+            This is taking longer than usual. Check that the server is running and that this address
+            reaches it. If you use a reverse proxy, make sure it forwards the <code>/socket.io</code> path.
+          </p>
+        )}
         {error && <p className="fixed bottom-6 rounded-xl bg-rose-50 px-4 py-2 text-sm text-rose-700">{error}</p>}
       </main>
     );

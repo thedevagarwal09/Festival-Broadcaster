@@ -18,6 +18,9 @@ services:
     environment:
       TZ: ${TZ:-Asia/Kolkata}
       BAILEYS_LOG_LEVEL: ${BAILEYS_LOG_LEVEL:-silent}
+      # Public address(es) you open the app at, comma-separated, e.g. https://wishes.example.com
+      # Only needed if a reverse proxy rewrites the Host header and the page can't connect.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
     volumes:
       # Database, WhatsApp login keys and uploaded media. Back this volume up; keep it private.
       - festival-data:/data

@@ -120,6 +120,7 @@ build and run it straight from GitHub.
    | `PUBLISH_PORT` | `3005` | Port on the server, e.g. `http://<server-ip>:3005` |
    | `TZ` | `Asia/Kolkata` | Time zone for logs and campaign names |
    | `BAILEYS_LOG_LEVEL` | `silent` | `info` / `debug` for WhatsApp protocol logs |
+   | `ALLOWED_ORIGINS` | *(empty)* | Your public address, e.g. `https://wishes.example.com`. Only needed behind a reverse proxy that rewrites the `Host` header |
 
 4. Click **Deploy the stack**. The first build takes a few minutes.
 5. Open `http://<server-ip>:3005` and scan the QR code. A fresh server starts with
@@ -127,6 +128,13 @@ build and run it straight from GitHub.
 
 To pick up new commits later, open the stack and click **Pull and redeploy**. You can also turn on
 **GitOps updates** to redeploy automatically.
+
+**Behind a reverse proxy or a domain name** (Nginx Proxy Manager, Traefik, Caddy, Cloudflare Tunnel):
+- Forward **all paths**, including `/socket.io/`, to `http://<server-ip>:3005`. If the proxy
+  supports WebSockets, turn them on (in Nginx Proxy Manager, tick *Websockets Support*). Without
+  WebSockets the app falls back to HTTP long-polling, which still works.
+- If the page stays on "Connecting to the server…", set `ALLOWED_ORIGINS` to the exact address in
+  your browser bar (e.g. `https://wishes.example.com`) and redeploy.
 
 ### 2. Where your data lives
 Everything is in the named volume **`festival-data`**, mounted at `/data`:
