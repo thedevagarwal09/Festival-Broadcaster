@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, LogOut, RefreshCw, Send, Terminal, Users, Wifi, WifiOff } from 'lucide-react';
+import { KeyRound, Loader2, Lock, LogOut, RefreshCw, Send, Terminal, Users, Wifi, WifiOff } from 'lucide-react';
 import { BroadcastComposer } from './BroadcastComposer';
+import { ChangePinModal } from './ChangePinModal';
 import { ContactsManager } from './ContactsManager';
 import { LiveTerminal } from './LiveTerminal';
 import { api } from '@/lib/api';
@@ -17,6 +18,7 @@ interface DashboardProps {
   socketConnected: boolean;
   onLogout: () => Promise<void>;
   onReconnect: () => void;
+  onLock: () => void;
 }
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof Users }> = [
@@ -35,8 +37,9 @@ const STATUS_LABEL: Record<SessionSnapshot['status'], string> = {
   logged_out: 'Logged out',
 };
 
-export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onReconnect }: DashboardProps) {
+export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onReconnect, onLock }: DashboardProps) {
   const [tab, setTab] = useState<Tab>('contacts');
+  const [changePinOpen, setChangePinOpen] = useState(false);
   const [contacts, setContacts] = useState<ContactDTO[]>([]);
   const [groups, setGroups] = useState<GroupDTO[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignDTO[]>([]);
@@ -153,12 +156,25 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
             {connected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
             {socketConnected ? STATUS_LABEL[snapshot.status] : 'Server offline'}
           </span>
-          <button type="button" className="btn-secondary" onClick={handleLogout} disabled={loggingOut}>
+          <button type="button" className="btn-ghost" onClick={() => setChangePinOpen(true)} title="Change your 4-digit PIN">
+            <KeyRound className="h-4 w-4" /> <span className="hidden sm:inline">Change PIN</span>
+          </button>
+          <button type="button" className="btn-secondary" onClick={onLock} title="Lock the app. Campaigns keep sending.">
+            <Lock className="h-4 w-4" /> Lock
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleLogout}
+            disabled={loggingOut}
+            title="Unlink WhatsApp from this app"
+          >
             {loggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
             Unlink
           </button>
         </div>
       </header>
+      <ChangePinModal open={changePinOpen} onClose={() => setChangePinOpen(false)} />
 
       {snapshot.status !== 'connected' && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-800">

@@ -1,124 +1,66 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { Dashboard } from '@/components/Dashboard';
-import { QrLogin } from '@/components/QrLogin';
-import { api } from '@/lib/api';
-import { getOrCreateSessionId, rotateSessionId } from '@/lib/session-id';
-import { getSocket } from '@/lib/socket';
-import type { SessionSnapshot, SessionUser } from '@/lib/types';
+import { PinScreen } from '@/components/PinScreen';
+import { WhatsAppApp } from '@/components/WhatsAppApp';
+import { AUTH_REQUIRED_EVENT, authApi } from '@/lib/api';
+import { disconnectSocket } from '@/lib/socket';
 
+type AuthState = 'checking' | 'setup' | 'locked' | 'unlocked' | 'offline';
+
+/** PIN gate: nothing that touches WhatsApp or your data loads until the app is unlocked. */
 export default function HomePage() {
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [snapshot, setSnapshot] = useState<SessionSnapshot | null>(null);
-  const [qr, setQr] = useState<{ qr: string; attempt: number } | null>(null);
-  const [socketConnected, setSocketConnected] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const sessionRef = useRef<string | null>(null);
+  const [state, setState] = useState<AuthState>('checking');
 
-  useEffect(() => {
-    const id = getOrCreateSessionId();
-    sessionRef.current = id;
-    setSessionId(id);
-  }, []);
-
-  /** Switch to a brand-new isolated session, but only if we're still on the one that ended. */
-  const rotateFrom = useCallback((expected: string) => {
-    if (sessionRef.current !== expected) return;
-    const id = rotateSessionId();
-    sessionRef.current = id;
-    setSnapshot(null);
-    setQr(null);
-    setSessionId(id);
+  const checkStatus = useCallback(() => {
+    authApi
+      .status()
+      .then((s) => setState(!s.pinSet ? 'setup' : s.authenticated ? 'unlocked' : 'locked'))
+      .catch(() => setState('offline'));
   }, []);
 
   useEffect(() => {
-    if (!sessionId) return;
-    const socket = getSocket();
+    checkStatus();
+  }, [checkStatus]);
 
-    const join = () => {
-      setSocketConnected(true);
-      setError(null);
-      socket.emit('init_session', { sessionId });
+  // Any 401 (expired session, PIN changed in another tab, server restarted) shows the lock screen.
+  useEffect(() => {
+    const onAuthRequired = () => {
+      disconnectSocket();
+      setState((s) => (s === 'setup' ? s : 'locked'));
     };
-    const onDisconnect = () => setSocketConnected(false);
-    const onStatus = (next: SessionSnapshot) => {
-      if (next.sessionId !== sessionId) return;
-      setSnapshot(next);
-      if (next.status === 'qr' && next.qr) {
-        setQr({ qr: next.qr, attempt: next.qrAttempt });
-      } else if (next.status !== 'qr') {
-        setQr(null);
-      }
-    };
-    const onQr = (payload: { sessionId: string; qr: string; attempt: number }) => {
-      if (payload.sessionId !== sessionId) return;
-      setQr({ qr: payload.qr, attempt: payload.attempt });
-    };
-    const onConnected = (user: SessionUser & { sessionId: string }) => {
-      if (user.sessionId !== sessionId) return;
-      setSnapshot((prev) =>
-        prev ? { ...prev, status: 'connected', user, qr: null } : { sessionId, status: 'connected', user, qr: null, qrAttempt: 0 },
-      );
-      setQr(null);
-    };
-    const onLoggedOut = (payload: { sessionId: string }) => rotateFrom(payload.sessionId);
-    const onError = (payload: { message: string }) => setError(payload.message);
+    window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+  }, []);
 
-    socket.on('connect', join);
-    socket.on('disconnect', onDisconnect);
-    socket.on('session_status', onStatus);
-    socket.on('qr_code', onQr);
-    socket.on('session_connected', onConnected);
-    socket.on('session_logged_out', onLoggedOut);
-    socket.on('session_error', onError);
-    if (socket.connected) join();
+  const lock = useCallback(() => {
+    disconnectSocket();
+    setState('locked');
+    authApi.logout().catch(() => undefined);
+  }, []);
 
-    return () => {
-      socket.off('connect', join);
-      socket.off('disconnect', onDisconnect);
-      socket.off('session_status', onStatus);
-      socket.off('qr_code', onQr);
-      socket.off('session_connected', onConnected);
-      socket.off('session_logged_out', onLoggedOut);
-      socket.off('session_error', onError);
-    };
-  }, [sessionId, rotateFrom]);
+  const unlocked = useCallback(() => setState('unlocked'), []);
 
-  const refresh = useCallback(() => {
-    if (sessionId) getSocket().emit('refresh_qr', { sessionId });
-  }, [sessionId]);
-
-  const logout = useCallback(async () => {
-    if (!sessionId) return;
-    await api.logout(sessionId);
-    rotateFrom(sessionId); // no-op if the socket event already rotated us
-  }, [sessionId, rotateFrom]);
-
-  if (!sessionId || !snapshot) {
+  if (state === 'checking' || state === 'offline') {
     return (
-      <main className="flex min-h-screen items-center justify-center">
-        <div className="flex items-center gap-3 text-stone-500">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          {socketConnected ? 'Preparing your WhatsApp session…' : 'Connecting to local server…'}
-        </div>
-        {error && <p className="fixed bottom-6 rounded-xl bg-rose-50 px-4 py-2 text-sm text-rose-700">{error}</p>}
+      <main className="flex min-h-screen flex-col items-center justify-center gap-4 text-stone-500">
+        {state === 'checking' ? (
+          <span className="flex items-center gap-3">
+            <Loader2 className="h-5 w-5 animate-spin" /> Connecting to local server…
+          </span>
+        ) : (
+          <>
+            <p>The local server isn’t responding. Make sure “npm run dev” is running.</p>
+            <button type="button" className="btn-secondary" onClick={checkStatus}>
+              Try again
+            </button>
+          </>
+        )}
       </main>
     );
   }
-
-  const showDashboard = snapshot.user !== null && snapshot.status !== 'qr' && snapshot.status !== 'logged_out';
-
-  return showDashboard ? (
-    <Dashboard
-      sessionId={sessionId}
-      snapshot={snapshot}
-      socketConnected={socketConnected}
-      onLogout={logout}
-      onReconnect={refresh}
-    />
-  ) : (
-    <QrLogin snapshot={snapshot} qr={qr} socketConnected={socketConnected} error={error} onRefresh={refresh} />
-  );
+  if (state === 'setup') return <PinScreen mode="setup" onUnlocked={unlocked} />;
+  if (state === 'locked') return <PinScreen key="unlock" mode="unlock" onUnlocked={unlocked} />;
+  return <WhatsAppApp onLock={lock} />;
 }

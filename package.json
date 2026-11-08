@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
+    "pin:reset": "tsx scripts/reset-pin.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
