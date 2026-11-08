@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AnyMessageContent, WASocket } from '@whiskeysockets/baileys';
+import { generateMessageIDV2, type AnyMessageContent, type WASocket } from '@whiskeysockets/baileys';
 import type { BroadcastCampaign, QueueItem } from '@prisma/client';
 import { prisma } from '../db';
 import { emitToSession } from '../realtime';
@@ -13,6 +13,7 @@ import type { SessionManager } from '../whatsapp/session-manager';
 import { PACING, randomBetween } from '../../src/lib/pacing';
 import { renderMessage } from '../../src/lib/spintax';
 import { describeQuietHours, isQuietNow, quietHoursEnd } from '../services/quietHours';
+import { registerAppMessageId } from '../services/chatActivity';
 import type { CampaignDTO, LogLevel } from '../../src/lib/types';
 
 /** Longest single sleep, so pause/abort/shutdown are noticed within a few seconds. */
@@ -443,7 +444,11 @@ export class Dispatcher {
       content = { text };
     }
 
-    const sent = await sock.sendMessage(jid, content);
+    // Our own id, registered first, so the chat-activity tracker can tell broadcasts from real
+    // conversations (a broadcast must never make a cold contact look like "chatted before").
+    const messageId = generateMessageIDV2(sock.user?.id);
+    registerAppMessageId(messageId);
+    const sent = await sock.sendMessage(jid, content, { messageId });
     if (!sent) throw new Error('WhatsApp did not acknowledge the message');
     return sent.key.id ?? null;
   }

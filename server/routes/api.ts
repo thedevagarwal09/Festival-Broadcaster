@@ -11,6 +11,7 @@ import { prisma } from '../db';
 import type { Dispatcher } from '../queue/dispatcher';
 import { queueItemToLog, toCampaignDTO } from '../serializers';
 import { removeUpload, upload } from '../upload';
+import { analyzeContacts, applySmartGroups, readSmartSettings } from '../services/contactCategorizer';
 import { detectMediaKind, IMAGE_MAX_INPUT_BYTES } from '../services/mediaCompressor';
 import {
   deleteMediaFile,
@@ -38,9 +39,12 @@ import {
   type ContactDTO,
   type DraftDTO,
   type GroupDTO,
+  type SmartCategory,
 } from '../../src/lib/types';
 
 const MAX_TEMPLATE_LENGTH = 4096;
+
+const isSmartCategory = (v: unknown): v is SmartCategory => v === 'frequent' || v === 'chatted' || v === 'cold';
 const MAX_GROUP_NAME_LENGTH = 80;
 const LOG_HISTORY_LIMIT = 500;
 
@@ -87,6 +91,7 @@ function toGroupDTO(group: {
   id: string;
   name: string;
   autoAddNew: boolean;
+  smartKey: string | null;
   createdAt: Date;
   contacts: Array<{ id: string }>;
 }): GroupDTO {
@@ -95,6 +100,7 @@ function toGroupDTO(group: {
     name: group.name,
     contactIds: group.contacts.map((c) => c.id),
     autoAddNew: group.autoAddNew,
+    smartKey: isSmartCategory(group.smartKey) ? group.smartKey : null,
     createdAt: group.createdAt.toISOString(),
   };
 }
@@ -156,6 +162,8 @@ export function createApiRouter(deps: {
         pushName: c.pushName,
         phone: c.phone,
         groupIds: c.groups.map((g) => g.id),
+        chatCategory: isSmartCategory(c.chatCategory) ? c.chatCategory : null,
+        lastChatAt: c.lastChatAt ? c.lastChatAt.toISOString() : null,
       }));
       res.json(payload);
     }),
@@ -177,6 +185,25 @@ export function createApiRouter(deps: {
         throw new HttpError(409, 'WhatsApp is not connected right now. Try again once it shows Connected.');
       }
       res.json(await sessions.syncAddressBook(req.params.sessionId));
+    }),
+  );
+
+  // --- Smart groups ------------------------------------------------------------
+
+  /** Preview: how contacts would be split with the given settings (nothing is changed). */
+  router.get(
+    '/sessions/:sessionId/smart-groups',
+    ah(async (req, res) => {
+      const { members: _members, ...analysis } = await analyzeContacts(req.params.sessionId, readSmartSettings(req.query));
+      res.json(analysis);
+    }),
+  );
+
+  /** One click: create/refresh ⚡ Frequent, 💬 Chatted Before and 📇 Cold groups. */
+  router.post(
+    '/sessions/:sessionId/smart-groups',
+    ah(async (req, res) => {
+      res.json(await applySmartGroups(req.params.sessionId, readSmartSettings(req.body)));
     }),
   );
 

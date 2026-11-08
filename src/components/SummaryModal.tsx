@@ -13,6 +13,8 @@ interface SummaryModalProps {
   recipients: number;
   variations: number;
   media: MediaInfo | null;
+  /** Recipients who have never chatted with this account (from smart categorisation). */
+  coldCount: number;
   /** Scheduled start, or null to start right away. */
   startAt: Date | null;
   /** Set when the run overlaps quiet hours. */
@@ -53,6 +55,7 @@ export function SummaryModal({
   recipients,
   variations,
   media,
+  coldCount,
   startAt,
   quietHours,
   preview,
@@ -62,9 +65,13 @@ export function SummaryModal({
   onConfirm,
 }: SummaryModalProps) {
   const [acknowledged, setAcknowledged] = useState(false);
+  const [coldAcknowledged, setColdAcknowledged] = useState(false);
 
   useEffect(() => {
-    if (open) setAcknowledged(false);
+    if (open) {
+      setAcknowledged(false);
+      setColdAcknowledged(false);
+    }
   }, [open]);
 
   useEffect(() => {
@@ -165,6 +172,29 @@ export function SummaryModal({
           </p>
         )}
 
+        {coldCount > 0 && (
+          <div className="mt-4 rounded-xl bg-rose-50 p-4 text-sm text-rose-800 ring-1 ring-rose-200">
+            <p className="flex items-center gap-2 font-semibold">
+              <span aria-hidden="true">📇</span> {coldCount === recipients ? 'Every recipient' : `${coldCount} of ${recipients} recipients`}{' '}
+              {coldCount === 1 ? 'has' : 'have'} never chatted with you
+            </p>
+            <p className="mt-1 text-xs">
+              People with no chat history are far more likely to report or block an unexpected message, and that is what
+              gets numbers banned. The safest choice is to remove them from this group or send them a personal message first.
+            </p>
+            <label className="mt-2 flex cursor-pointer items-start gap-2 text-xs font-medium">
+              <input
+                id="ack-cold"
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 accent-rose-600"
+                checked={coldAcknowledged}
+                onChange={(e) => setColdAcknowledged(e.target.checked)}
+              />
+              Send to cold contacts anyway — I know these people personally.
+            </label>
+          </div>
+        )}
+
         <div className={`mt-4 rounded-xl p-4 text-sm ring-1 ${risk.tone}`}>
           <p className="flex items-center gap-2 font-semibold">
             <ShieldAlert className="h-4 w-4" /> Ban risk: {risk.label}
@@ -209,7 +239,7 @@ export function SummaryModal({
           <button type="button" className="btn-secondary" onClick={onCancel} disabled={submitting}>
             Cancel
           </button>
-          <button type="button" className="btn-primary" onClick={onConfirm} disabled={!acknowledged || submitting}>
+          <button type="button" className="btn-primary" onClick={onConfirm} disabled={!acknowledged || (coldCount > 0 && !coldAcknowledged) || submitting}>
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
             {startAt ? 'Schedule broadcast' : 'Start broadcast'}
           </button>

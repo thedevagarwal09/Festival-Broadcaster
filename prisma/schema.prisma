@@ -26,6 +26,12 @@ model UserSession {
   status      String   @default("INITIALIZING")
   /// Last time the address book was pulled from WhatsApp. Reconnects skip the pull while this is recent.
   contactsSyncedAt DateTime?
+  /// Set on the first successful connection. Chat history is only accepted before that (WhatsApp sends it once, right after linking).
+  historyCheckedAt  DateTime?
+  /// When chat-history metadata (not message text) was last imported
+  historyImportedAt DateTime?
+  /// When smart groups were last computed
+  categorizedAt     DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -33,6 +39,7 @@ model UserSession {
   groups    ContactGroup[]
   campaigns BroadcastCampaign[]
   draft     Draft?
+  activity  ChatActivity[]
 }
 
 model Contact {
@@ -46,6 +53,12 @@ model Contact {
   pushName  String?
   /// E.164 phone, e.g. +919876543210
   phone     String
+  /// WhatsApp privacy id (…@lid); some chats are addressed by this instead of the phone number
+  lid       String?
+  /// Smart category from the last categorisation: frequent | chatted | cold
+  chatCategory String?
+  /// Most recent message either way, from chat activity (no message content is stored)
+  lastChatAt   DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -54,6 +67,28 @@ model Contact {
 
   @@unique([sessionId, jid])
   @@index([sessionId])
+  @@index([sessionId, lid])
+}
+
+/// Per-chat engagement counters used for smart groups. Only counts and timestamps — never message text.
+model ChatActivity {
+  id            String    @id @default(uuid())
+  sessionId     String
+  /// The chat's id as WhatsApp reports it: phone JID (…@s.whatsapp.net) or privacy id (…@lid)
+  jid           String
+  messagesIn    Int       @default(0)
+  messagesOut   Int       @default(0)
+  lastInAt      DateTime?
+  lastOutAt     DateTime?
+  /// The chat exists in the WhatsApp chat list (even if no messages were imported)
+  hasThread     Boolean   @default(false)
+  /// Chat-list timestamp of the last activity
+  threadAt      DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  session UserSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, jid])
 }
 
 model ContactGroup {
@@ -62,6 +97,8 @@ model ContactGroup {
   sessionId  String
   /// When true, contacts that appear in the address book later are added to this group automatically.
   autoAddNew Boolean  @default(false)
+  /// Smart group managed by the categoriser: frequent | chatted | cold (membership is replaced on each run)
+  smartKey   String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

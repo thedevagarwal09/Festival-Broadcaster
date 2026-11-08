@@ -40,6 +40,35 @@ export interface ContactDTO {
   pushName: string | null;
   phone: string;
   groupIds: string[];
+  /** From the last smart categorisation (null = not categorised yet). */
+  chatCategory: SmartCategory | null;
+  /** Most recent message either way (no content is stored). */
+  lastChatAt: string | null;
+}
+
+export type SmartCategory = 'frequent' | 'chatted' | 'cold';
+
+export interface SmartGroupSettings {
+  /** "Recent" window for two-way conversations (30–60 days recommended). */
+  recentDays: number;
+  /** Most-active share of chatted contacts that also count as frequent (10–20% recommended). */
+  topPercent: number;
+}
+
+export interface SmartGroupsAnalysis {
+  settings: SmartGroupSettings;
+  counts: Record<SmartCategory, number>;
+  total: number;
+  coverage: {
+    /** When chat history was imported (only possible right after linking). */
+    historyImportedAt: string | null;
+    /** Chats with activity data, and how many matched a saved contact. */
+    chatsKnown: number;
+    chatsMatched: number;
+  };
+  categorizedAt: string | null;
+  /** A few names from the frequent group, for a sanity check before applying. */
+  sampleFrequent: string[];
 }
 
 export interface ContactSyncState {
@@ -58,6 +87,8 @@ export interface GroupDTO {
   contactIds: string[];
   /** New address-book contacts are added to this group automatically. */
   autoAddNew: boolean;
+  /** Smart group managed by the categoriser (membership replaced on each run). */
+  smartKey: SmartCategory | null;
   createdAt: string;
 }
 

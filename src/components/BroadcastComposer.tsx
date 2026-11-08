@@ -186,6 +186,12 @@ export function BroadcastComposer({
   const recipients = group?.contactIds.length ?? 0;
   const contactById = useMemo(() => new Map(contacts.map((c) => [c.id, c])), [contacts]);
   const previewUrl = media ? `/uploads/${media.file}` : null;
+
+  // Cold-contact safeguard: recipients who have never chatted with this account.
+  const coldCount = useMemo(
+    () => (group ? group.contactIds.filter((id) => contactById.get(id)?.chatCategory === 'cold').length : 0),
+    [group, contactById],
+  );
   const isVideo = media?.mediaType === 'video';
 
   const sampleContact = useMemo(() => {
@@ -766,6 +772,19 @@ export function BroadcastComposer({
               {startAt ? startAt.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Right away'}
             </strong>
           </div>
+          {coldCount > 0 && (
+            <p
+              className={`rounded-lg px-3 py-2 text-xs ${
+                group?.smartKey === 'cold' || coldCount >= recipients / 2 ? 'bg-rose-50 text-rose-800' : 'bg-amber-50 text-amber-800'
+              }`}
+            >
+              <strong>
+                📇 {coldCount === recipients ? 'All' : coldCount} of {recipients} recipients have never chatted with you.
+              </strong>{' '}
+              Bulk messages to cold contacts are the most common cause of WhatsApp bans. Consider sending to ⚡ Frequent and 💬
+              Chatted Before first.
+            </p>
+          )}
           {touchesQuiet && quietHours && (
             <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800">
               This run overlaps quiet hours ({describeWindow(quietHours)}). It pauses then and continues at{' '}
@@ -810,6 +829,7 @@ export function BroadcastComposer({
         recipients={recipients}
         variations={variations}
         media={media}
+        coldCount={coldCount}
         startAt={startAt}
         quietHours={touchesQuiet ? quietHours : null}
         preview={preview}

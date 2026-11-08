@@ -39,6 +39,8 @@ any paid service. The database is a local SQLite file, and the app needs no Redi
 │   ├── services/mediaCompressor.ts  # sharp + ffmpeg compression pipeline
 │   ├── services/mediaJobs.ts        # background compression jobs with live progress
 │   ├── services/scheduler.ts        # node-cron scheduler: scheduled starts, quiet hours
+│   ├── services/chatActivity.ts     # chat engagement counters (history once + live; no message text)
+│   ├── services/contactCategorizer.ts # ⚡ Frequent / 💬 Chatted Before / 📇 Cold smart groups
 │   ├── services/quietHours.ts       # quiet-hours settings and time-window maths
 │   ├── whatsapp/session-manager.ts  # Module A: Baileys sockets, QR stream, reconnect, contact sync
 │   ├── queue/dispatcher.ts      # Module C: SQLite-backed serial dispatcher with anti-ban pacing
@@ -167,6 +169,33 @@ docker run --rm -v festival-broadcaster_festival-data:/data -v "$PWD":/backup bu
   use a VPN (WireGuard, Tailscale) or a reverse proxy that adds its own login.
 - **One WhatsApp account per instance.** If you also run the app on your laptop, unlink one of
   them, or each will keep its own separate contacts and campaigns.
+
+## Smart groups (contact categorisation)
+
+On the *Contacts & Groups* page, **Create smart groups** sorts every contact by your WhatsApp chat
+activity in one click:
+
+| Group | Who goes in it |
+|---|---|
+| **⚡ Frequent Chats** | A two-way conversation within the last 45 days (30/45/60 selectable), **or** the most active 15% (10/15/20%) of everyone you've chatted with, by message count weighted for recency |
+| **💬 Chatted Before** | Any existing 1-on-1 chat or message, but not frequent. The safest audience for festival wishes |
+| **📇 Never Chatted / Cold Contacts** | Address-book numbers with no chat at all, kept separate on purpose |
+
+- **Where the data comes from:** WhatsApp sends recent chat history **once, right after a phone is
+  linked**. The app accepts it only then (reconnects stay fast), plus every message sent or received
+  afterwards. **Only counts and timestamps are stored, never message text.** Group chats, status
+  updates, reactions and system messages are ignored.
+- **Broadcasts don't count as conversations.** Messages sent by this app, including older
+  broadcasts, are excluded, so a campaign can never turn a cold contact into "chatted before".
+- **Privacy ids:** chats that WhatsApp addresses by privacy id (`…@lid`) are matched to the right
+  contact through the address book.
+- **If you linked before this feature existed,** there's no history yet, and the card says so. Click
+  **Unlink**, then scan the QR code again; your groups and campaigns are kept. New messages are
+  tracked from now on either way.
+- **Cold-contact safeguard:** when a broadcast includes cold contacts, the composer warns, and the
+  review step needs a second, explicit confirmation before sending.
+- Smart groups are refreshed each time you click *Update smart groups*. Contacts also get a ⚡/💬/📇
+  badge and can be filtered by category.
 
 ## Media compression
 

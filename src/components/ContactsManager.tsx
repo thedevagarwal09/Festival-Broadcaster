@@ -20,7 +20,8 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { contactDisplayName, formatRelative, initials } from '@/lib/format';
-import type { ContactDTO, ContactSyncState, GroupDTO } from '@/lib/types';
+import type { ContactDTO, ContactSyncState, GroupDTO, SmartCategory } from '@/lib/types';
+import { SMART_META, SmartGroupsCard } from './SmartGroupsCard';
 
 interface ContactsManagerProps {
   sessionId: string;
@@ -35,7 +36,7 @@ interface ContactsManagerProps {
   onGroupsChanged: () => Promise<void>;
 }
 
-type Filter = 'all' | 'named' | 'unnamed' | 'ungrouped' | 'selected' | `group:${string}`;
+type Filter = 'all' | 'named' | 'unnamed' | 'ungrouped' | 'selected' | `group:${string}` | `cat:${SmartCategory}`;
 
 const PAGE_SIZE = 200;
 const GROUP_SUGGESTIONS = ['Diwali - Family', 'Diwali - Friends', 'Diwali - Colleagues', 'Diwali - Clients'];
@@ -73,6 +74,7 @@ export function ContactsManager({
       if (filter === 'ungrouped' && c.groupIds.length > 0) return false;
       if (filter === 'selected' && !selected.has(c.id)) return false;
       if (filter.startsWith('group:') && !c.groupIds.includes(filter.slice(6))) return false;
+      if (filter.startsWith('cat:') && c.chatCategory !== filter.slice(4)) return false;
       if (!q) return true;
       const haystack = `${c.name ?? ''} ${c.pushName ?? ''}`.toLowerCase();
       return haystack.includes(q) || (digits.length > 0 && c.phone.replace(/\D/g, '').includes(digits));
@@ -206,6 +208,8 @@ export function ContactsManager({
     <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
       {/* Group builder */}
       <aside className="flex flex-col gap-4">
+        <SmartGroupsCard sessionId={sessionId} onApplied={onGroupsChanged} />
+
         <section className="card p-5">
           <h2 className="mb-1 flex items-center gap-2 font-semibold text-stone-900">
             {editingGroup ? <Pencil className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
@@ -307,6 +311,11 @@ export function ContactsManager({
                     <p className="truncate text-sm font-medium text-stone-800">{g.name}</p>
                     <p className="flex items-center gap-1.5 text-xs text-stone-500">
                       {g.contactIds.length} contacts
+                      {g.smartKey && (
+                        <span className={`chip px-1.5 ${SMART_META[g.smartKey].tone}`} title="Smart group — refreshed each time you update smart groups">
+                          smart
+                        </span>
+                      )}
                       {g.autoAddNew && (
                         <span className="chip bg-diya-50 px-1.5 text-diya-700" title="New contacts join automatically">
                           <Zap className="h-3 w-3" /> auto
@@ -362,6 +371,9 @@ export function ContactsManager({
             <option value="unnamed">Number only</option>
             <option value="ungrouped">Not in any group</option>
             <option value="selected">Selected only</option>
+            <option value="cat:frequent">⚡ Frequent chats</option>
+            <option value="cat:chatted">💬 Chatted before</option>
+            <option value="cat:cold">📇 Never chatted (cold)</option>
             {groups.map((g) => (
               <option key={g.id} value={`group:${g.id}`}>
                 In: {g.name}
@@ -540,18 +552,33 @@ export function ContactsManager({
                           {!c.name && c.pushName ? ' · WhatsApp name' : ''}
                         </span>
                       </span>
-                      <span className="hidden shrink-0 gap-1 sm:flex">
-                        {c.groupIds.slice(0, 2).map((gid) => {
-                          const g = groups.find((x) => x.id === gid);
-                          return g ? (
-                            <span key={gid} className="chip bg-stone-100 text-stone-600">
-                              {g.name}
-                            </span>
-                          ) : null;
-                        })}
-                        {c.groupIds.length > 2 && (
-                          <span className="chip bg-stone-100 text-stone-600">+{c.groupIds.length - 2}</span>
+                      <span className="hidden min-w-0 max-w-[50%] shrink items-center justify-end gap-1 overflow-hidden sm:flex">
+                        {c.chatCategory && (
+                          <span
+                            className={`chip shrink-0 ${SMART_META[c.chatCategory].tone}`}
+                            title={c.lastChatAt ? `Last chat ${formatRelative(c.lastChatAt)}` : SMART_META[c.chatCategory].hint}
+                          >
+                            {SMART_META[c.chatCategory].icon} {SMART_META[c.chatCategory].short}
+                          </span>
                         )}
+                        {(() => {
+                          // Smart groups are already shown by the category chip above.
+                          const manual = c.groupIds
+                            .map((gid) => groups.find((x) => x.id === gid))
+                            .filter((g): g is GroupDTO => Boolean(g) && !g?.smartKey);
+                          return (
+                            <>
+                              {manual.slice(0, 2).map((g) => (
+                                <span key={g.id} className="chip min-w-0 bg-stone-100 text-stone-600" title={g.name}>
+                                  <span className="truncate">{g.name}</span>
+                                </span>
+                              ))}
+                              {manual.length > 2 && (
+                                <span className="chip shrink-0 bg-stone-100 text-stone-600">+{manual.length - 2}</span>
+                              )}
+                            </>
+                          );
+                        })()}
                       </span>
                       {isSelected && <Check className="h-4 w-4 shrink-0 text-diya-600" />}
                     </label>
