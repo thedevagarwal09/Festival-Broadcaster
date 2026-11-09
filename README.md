@@ -39,8 +39,6 @@ any paid service. The database is a local SQLite file, and the app needs no Redi
 │   ├── services/mediaCompressor.ts  # sharp + ffmpeg compression pipeline
 │   ├── services/mediaJobs.ts        # background compression jobs with live progress
 │   ├── services/scheduler.ts        # node-cron scheduler: scheduled starts, quiet hours
-│   ├── services/chatActivity.ts     # chat engagement counters (history once + live; no message text)
-│   ├── services/contactCategorizer.ts # ⚡ Frequent / 💬 Chatted Before / 📇 Cold smart groups
 │   ├── services/quietHours.ts       # quiet-hours settings and time-window maths
 │   ├── whatsapp/session-manager.ts  # Module A: Baileys sockets, QR stream, reconnect, contact sync
 │   ├── queue/dispatcher.ts      # Module C: SQLite-backed serial dispatcher with anti-ban pacing
@@ -170,33 +168,6 @@ docker run --rm -v festival-broadcaster_festival-data:/data -v "$PWD":/backup bu
 - **One WhatsApp account per instance.** If you also run the app on your laptop, unlink one of
   them, or each will keep its own separate contacts and campaigns.
 
-## Smart groups (contact categorisation)
-
-On the *Contacts & Groups* page, **Create smart groups** sorts every contact by your WhatsApp chat
-activity in one click:
-
-| Group | Who goes in it |
-|---|---|
-| **⚡ Frequent Chats** | A two-way conversation within the last 45 days (30/45/60 selectable), **or** the most active 15% (10/15/20%) of everyone you've chatted with, by message count weighted for recency |
-| **💬 Chatted Before** | Any existing 1-on-1 chat or message, but not frequent. The safest audience for festival wishes |
-| **📇 Never Chatted / Cold Contacts** | Address-book numbers with no chat at all, kept separate on purpose |
-
-- **Where the data comes from:** WhatsApp sends recent chat history **once, right after a phone is
-  linked**. The app accepts it only then (reconnects stay fast), plus every message sent or received
-  afterwards. **Only counts and timestamps are stored, never message text.** Group chats, status
-  updates, reactions and system messages are ignored.
-- **Broadcasts don't count as conversations.** Messages sent by this app, including older
-  broadcasts, are excluded, so a campaign can never turn a cold contact into "chatted before".
-- **Privacy ids:** chats that WhatsApp addresses by privacy id (`…@lid`) are matched to the right
-  contact through the address book.
-- **If you linked before this feature existed,** there's no history yet, and the card says so. Click
-  **Unlink**, then scan the QR code again; your groups and campaigns are kept. New messages are
-  tracked from now on either way.
-- **Cold-contact safeguard:** when a broadcast includes cold contacts, the composer warns, and the
-  review step needs a second, explicit confirmation before sending.
-- Smart groups are refreshed each time you click *Update smart groups*. Contacts also get a ⚡/💬/📇
-  badge and can be filtered by category.
-
 ## Media compression
 
 Every attachment goes through a compression step before it can be queued, so WhatsApp never has to
@@ -207,6 +178,13 @@ errors). The code is in `server/services/mediaCompressor.ts`.
 |---|---|---|
 | **Images** (sharp) | JPEG, PNG, WebP up to 25 MB | JPEG, at most 1920×1080 (1080×1920 for portrait), quality 80→75, under 800 KB. EXIF/GPS metadata is removed after applying the photo's rotation, and transparency becomes white |
 | **Videos** (ffmpeg via `fluent-ffmpeg` + `@ffmpeg-installer/ffmpeg`) | MP4, MOV, MKV up to 500 MB | H.264 + AAC in MP4, at most 720p (short side) at ≤ 30 fps. Short clips use one CRF 25 pass with a bitrate cap. Longer clips use two passes at a bitrate computed for about 14 MB. Anything over 16 MB is re-encoded once at a lower bitrate. Clips too long to fit at watchable quality (about 5+ minutes) are refused with a clear message |
+
+**Compress or send the original.** Above the attach button you choose *Compress (recommended)* or
+*Send original*. The choice is remembered in your browser. *Send original* stores the file
+byte-for-byte: no resizing or re-encoding, and photo metadata such as location stays in it. It
+accepts what WhatsApp sends as a normal photo or video: JPG/PNG/WebP up to 16 MB and MP4 up to
+64 MB. MOV/MKV still need compressing. Large originals are uploaded once per recipient, so they
+send more slowly.
 
 Compression runs as a background job with live progress, so a slow video never hits a browser or
 proxy timeout. Videos are encoded one at a time to protect the server's CPU. The original upload is
@@ -251,10 +229,10 @@ have gone out.
   that has finished pairing reconnects without a new QR scan.
 - QR strings become base64 PNG data URLs (`qrcode`) and are pushed as `qr_code` events.
 - On `connection === 'open'` the server emits `session_connected`.
-- **Contacts, not messages.** History sync is turned off: only the small `PUSH_NAME` list (profile
-  names) is accepted, so no chats or messages are downloaded or decrypted, and reconnects skip
-  Baileys' 20-second wait for history. The address book (the `critical_unblock_low` app-state
-  collection) is pulled directly.
+- **Contacts, not messages.** Chat history is never downloaded: no chats, no messages, not even
+  the profile-name list, so linking is quick and reconnects skip Baileys' 20-second wait for
+  history. The address book (the `critical_unblock_low` app-state collection) is pulled directly,
+  and WhatsApp profile names still arrive live.
 - **Stored, not re-synced.** Contacts live in SQLite, and the time of the last address-book pull is
   saved (`UserSession.contactsSyncedAt`). On reconnect the pull is skipped if it's under 6 hours old.
   New or edited contacts still arrive live through WhatsApp's `server_sync` push, and later pulls only

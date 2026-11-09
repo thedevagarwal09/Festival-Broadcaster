@@ -4,11 +4,11 @@ import path from 'node:path';
 import { emitToSession } from '../realtime';
 import { UPLOAD_DIR } from '../upload';
 import { errorMessage } from '../utils/errors';
-import { compressMedia, MediaError, type MediaKind } from './mediaCompressor';
+import { compressMedia, keepOriginal, MediaError, type MediaKind } from './mediaCompressor';
 import type { MediaInfo, MediaJob } from '../../src/lib/types';
 
 /** Compressed files are named "<timestamp>-<uuid>.jpg|mp4"; nothing else is accepted as a media reference. */
-const MEDIA_FILE_RE = /^\d{10,16}-[0-9a-f-]{36}\.(jpg|mp4)$/;
+const MEDIA_FILE_RE = /^\d{10,16}-[0-9a-f-]{36}\.(jpg|png|webp|mp4)$/;
 const JOB_TTL_MS = 60 * 60_000;
 
 const jobs = new Map<string, MediaJob>();
@@ -56,13 +56,15 @@ export function startMediaJob(params: {
   uploadPath: string;
   kind: MediaKind;
   originalName: string;
+  /** false = keep the file exactly as uploaded */
+  compress: boolean;
 }): MediaJob {
   const job: MediaJob = {
     id: randomUUID(),
     sessionId: params.sessionId,
     status: 'processing',
     progress: 0,
-    stage: params.kind === 'video' ? 'Waiting to start' : 'Starting',
+    stage: params.compress && params.kind === 'video' ? 'Waiting to start' : 'Starting',
     result: null,
     error: null,
   };
@@ -78,7 +80,8 @@ export function startMediaJob(params: {
 
   const work = async (): Promise<void> => {
     try {
-      const result = await compressMedia({
+      const run = params.compress ? compressMedia : keepOriginal;
+      const result = await run({
         inputPath: params.uploadPath,
         kind: params.kind,
         originalName: params.originalName,
@@ -95,7 +98,9 @@ export function startMediaJob(params: {
       job.stage = 'Ready';
       job.result = result;
       console.log(
-        `[media] ${params.kind} "${params.originalName}": ${(result.originalSize / 1048576).toFixed(1)} MB → ${(result.size / 1048576).toFixed(2)} MB`,
+        params.compress
+          ? `[media] ${params.kind} "${params.originalName}": ${(result.originalSize / 1048576).toFixed(1)} MB → ${(result.size / 1048576).toFixed(2)} MB`
+          : `[media] ${params.kind} "${params.originalName}": kept original (${(result.size / 1048576).toFixed(1)} MB)`,
       );
     } catch (err) {
       job.status = 'failed';
@@ -109,7 +114,7 @@ export function startMediaJob(params: {
     }
   };
 
-  if (params.kind === 'video') {
+  if (params.compress && params.kind === 'video') {
     videoQueue = videoQueue.then(work, work);
   } else {
     void work();

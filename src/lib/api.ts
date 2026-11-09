@@ -8,8 +8,6 @@ import type {
   MediaJob,
   QuietHoursSettings,
   SessionSnapshot,
-  SmartGroupSettings,
-  SmartGroupsAnalysis,
 } from './types';
 
 export interface CreateCampaignInput {
@@ -38,6 +36,8 @@ export interface DraftInput {
 export function uploadMedia(
   sessionId: string,
   file: File,
+  /** false = keep the file exactly as it is */
+  compress: boolean,
   onUploadProgress: (percent: number) => void,
 ): { promise: Promise<MediaJob>; cancel: () => void } {
   const xhr = new XMLHttpRequest();
@@ -60,6 +60,7 @@ export function uploadMedia(
     xhr.onerror = () => reject(new Error('Upload failed. Check your connection and try again.'));
     xhr.onabort = () => reject(new Error('Upload cancelled.'));
     const form = new FormData();
+    form.append('compress', compress ? 'true' : 'false'); // before the file so the server sees it first
     form.append('media', file);
     xhr.send(form);
   });
@@ -121,13 +122,6 @@ export const api = {
   draft: (sessionId: string) => request<DraftDTO>(`${base(sessionId)}/draft`),
   saveDraft: (sessionId: string, draft: DraftInput) =>
     request<{ updatedAt: string }>(`${base(sessionId)}/draft`, json('PUT', draft)),
-
-  /** Preview the smart split (changes nothing). */
-  smartGroups: (sessionId: string, s: SmartGroupSettings) =>
-    request<SmartGroupsAnalysis>(`${base(sessionId)}/smart-groups?recentDays=${s.recentDays}&topPercent=${s.topPercent}`),
-  /** Create/refresh the three smart groups. */
-  applySmartGroups: (sessionId: string, s: SmartGroupSettings) =>
-    request<SmartGroupsAnalysis>(`${base(sessionId)}/smart-groups`, json('POST', s)),
 
   quietHours: () => request<QuietHoursSettings>('/api/settings/quiet-hours'),
   saveQuietHours: (q: Pick<QuietHoursSettings, 'enabled' | 'start' | 'end'>) =>

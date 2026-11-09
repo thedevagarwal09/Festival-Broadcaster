@@ -80,12 +80,14 @@ export interface CompressOptions {
 export async function compressMedia(opts: CompressOptions): Promise<MediaInfo> {
   const originalSize = (await fs.stat(opts.inputPath)).size;
   const result = opts.kind === 'image' ? await compressImage(opts) : await compressVideo(opts);
-  return { ...result, originalSize, originalName: opts.originalName };
+  return { ...result, originalSize, originalName: opts.originalName, compressed: true, note: null };
 }
 
 // ---- Images -------------------------------------------------------------------
 
-async function compressImage(opts: CompressOptions): Promise<Omit<MediaInfo, 'originalSize' | 'originalName'>> {
+type CompressResult = Omit<MediaInfo, 'originalSize' | 'originalName' | 'compressed' | 'note'>;
+
+async function compressImage(opts: CompressOptions): Promise<CompressResult> {
   const { inputPath, outputDir, onProgress } = opts;
   if ((await fs.stat(inputPath)).size > IMAGE_MAX_INPUT_BYTES) {
     throw new MediaError('Images can be up to 25 MB.');
@@ -152,6 +154,8 @@ async function compressImage(opts: CompressOptions): Promise<Omit<MediaInfo, 'or
 // ---- Videos -------------------------------------------------------------------
 
 interface VideoProbe {
+  /** e.g. "h264", "hevc" */
+  codec: string | null;
   durationSec: number;
   width: number;
   height: number;
@@ -178,10 +182,12 @@ export function probeVideo(inputPath: string): Promise<VideoProbe> {
         return;
       }
       const dims = /,\s*(\d{2,5})x(\d{2,5})[\s,[]/.exec(videoLine);
+      const codec = /Video:\s*([a-z0-9_]+)/i.exec(videoLine);
       const fps = /(\d+(?:\.\d+)?)\s*fps/.exec(videoLine);
       const rot =
         /displaymatrix: rotation of (-?\d+(?:\.\d+)?) degrees/.exec(stderr) ?? /rotate\s*:\s*(-?\d+)/.exec(stderr);
       resolve({
+        codec: codec ? codec[1]!.toLowerCase() : null,
         durationSec: Number(duration[1]) * 3600 + Number(duration[2]) * 60 + Number(duration[3]),
         width: dims ? Number(dims[1]) : 1280,
         height: dims ? Number(dims[2]) : 720,
@@ -223,7 +229,7 @@ function runFfmpeg(
   });
 }
 
-async function compressVideo(opts: CompressOptions): Promise<Omit<MediaInfo, 'originalSize' | 'originalName'>> {
+async function compressVideo(opts: CompressOptions): Promise<CompressResult> {
   const { inputPath, outputDir, onProgress } = opts;
   if ((await fs.stat(inputPath)).size > VIDEO_MAX_INPUT_BYTES) {
     throw new MediaError('Videos can be up to 500 MB before compression.');
@@ -334,4 +340,96 @@ async function compressVideo(opts: CompressOptions): Promise<Omit<MediaInfo, 'or
       ['-0.log', '-0.log.mbtree', '-0.log.temp', '-0.log.mbtree.temp'].map((s) => fs.rm(passLog + s, { force: true })),
     );
   }
+}
+
+// ---- Send as-is ----------------------------------------------------------------
+
+/** Largest originals WhatsApp reliably accepts as normal photo / video messages. */
+export const ORIGINAL_IMAGE_MAX_BYTES = 16 * 1024 * 1024;
+export const ORIGINAL_VIDEO_MAX_BYTES = 64 * 1024 * 1024;
+
+const ORIGINAL_TYPES: Record<string, { ext: string; kind: MediaKind }> = {
+  jpeg: { ext: '.jpg', kind: 'image' },
+  png: { ext: '.png', kind: 'image' },
+  webp: { ext: '.webp', kind: 'image' },
+};
+
+/**
+ * "Keep original": validate the upload and store it byte-for-byte (no resizing, no re-encoding,
+ * metadata untouched). Only formats WhatsApp can send as a normal photo or video are allowed.
+ */
+export async function keepOriginal(opts: CompressOptions): Promise<MediaInfo> {
+  const { inputPath, outputDir, onProgress, originalName } = opts;
+  const size = (await fs.stat(inputPath)).size;
+  onProgress?.(20, 'Checking file');
+
+  if (opts.kind === 'image') {
+    if (size > ORIGINAL_IMAGE_MAX_BYTES) {
+      throw new MediaError('Original images can be up to 16 MB. Choose “Compress” for larger photos.');
+    }
+    let meta: Metadata;
+    try {
+      meta = await sharp(inputPath, { failOn: 'error' }).metadata();
+    } catch {
+      throw new MediaError('That file is not a readable image.');
+    }
+    const type = meta.format ? ORIGINAL_TYPES[meta.format] : undefined;
+    if (!type) throw new MediaError('Use a JPG, PNG or WebP image.');
+    const rotated = (meta.orientation ?? 1) >= 5;
+    const file = `${Date.now()}-${randomUUID()}${type.ext}`;
+    await fs.copyFile(inputPath, path.join(outputDir, file));
+    onProgress?.(100, 'Done');
+    return {
+      file,
+      mediaType: 'image',
+      mimeType: `image/${meta.format}`,
+      size,
+      originalSize: size,
+      originalName,
+      width: (rotated ? meta.height : meta.width) ?? null,
+      height: (rotated ? meta.width : meta.height) ?? null,
+      durationSec: null,
+      compressed: false,
+      note: 'Sent exactly as uploaded — photo location and camera details stay in the file.',
+    };
+  }
+
+  // Video: must already be an MP4 (WhatsApp video messages are MP4).
+  if (size > ORIGINAL_VIDEO_MAX_BYTES) {
+    throw new MediaError('Original videos can be up to 64 MB. Choose “Compress” for larger videos.');
+  }
+  const probe = await probeVideo(inputPath);
+  const container = await new Promise<string>((resolve) => {
+    const proc = spawn(ffmpegInstaller.path, ['-hide_banner', '-i', inputPath]);
+    let stderr = '';
+    proc.stderr.on('data', (c: Buffer) => {
+      stderr += c.toString();
+    });
+    // e.g. "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from …" (MP4/MOV) or "Input #0, matroska,webm, from …"
+    proc.on('close', () => resolve(/Input #0, (\S+), from/.exec(stderr)?.[1] ?? ''));
+    proc.on('error', () => resolve(''));
+  });
+  if (!container.split(',').includes('mp4') || path.extname(originalName).toLowerCase() !== '.mp4') {
+    throw new MediaError('To send a video as-is it must be an MP4. MOV and MKV videos need “Compress”.');
+  }
+  const sideways = Math.abs(probe.rotation) % 180 === 90;
+  const file = `${Date.now()}-${randomUUID()}.mp4`;
+  await fs.copyFile(inputPath, path.join(outputDir, file));
+  onProgress?.(100, 'Done');
+  return {
+    file,
+    mediaType: 'video',
+    mimeType: 'video/mp4',
+    size,
+    originalSize: size,
+    originalName,
+    width: sideways ? probe.height : probe.width,
+    height: sideways ? probe.width : probe.height,
+    durationSec: Math.round(probe.durationSec * 10) / 10,
+    compressed: false,
+    note:
+      probe.codec && probe.codec !== 'h264'
+        ? `This video uses ${probe.codec.toUpperCase()}, which some phones can’t play. Choose “Compress” for the widest compatibility.`
+        : 'Sent exactly as uploaded.',
+  };
 }

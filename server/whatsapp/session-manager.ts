@@ -2,10 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import makeWASocket, {
   Browsers,
-  proto,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  jidNormalizedUser,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
   type BaileysEventMap,
@@ -21,8 +19,6 @@ import { emitToSession, sessionWatcherCount } from '../realtime';
 import { errorMessage } from '../utils/errors';
 import { sleep } from '../utils/sleep';
 import { mergePreviousSessions } from './account-merge';
-import { recordHistory, recordLive } from '../services/chatActivity';
-import { resolveLids } from '../services/lidResolver';
 import { jidToPhone, normalizePnJid, toSessionUser } from '../utils/jid';
 import {
   isValidSessionId,
@@ -47,8 +43,6 @@ const ADDRESS_BOOK_SYNC_DELAY_MS = 2_000;
  * notification and Baileys pulls just that change. This periodic pull is only a backstop.
  */
 const ADDRESS_BOOK_MAX_AGE_MS = 6 * 60 * 60_000;
-/** When to match privacy-id chats to contacts after connecting (history can take minutes). */
-const LID_RESOLVE_DELAYS_MS = [60_000, 5 * 60_000];
 
 interface ManagedSession {
   id: string;
@@ -69,21 +63,6 @@ type MessageStatusListener = (sessionId: string, updates: Array<{ messageId: str
 
 function cleanString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
-}
-
-/** The contact's WhatsApp privacy id (…@lid), when WhatsApp reports one. */
-function resolveLid(contact: Partial<WAContact>): string | null {
-  const record = contact as unknown as Record<string, unknown>;
-  for (const key of ['lid', 'id']) {
-    const v = record[key];
-    if (typeof v !== 'string' || !v.endsWith('@lid')) continue;
-    try {
-      return jidNormalizedUser(v);
-    } catch {
-      // ignore malformed ids
-    }
-  }
-  return null;
 }
 
 /** Contacts may arrive keyed by phone JID or by LID with the phone JID in another field. */
@@ -267,15 +246,6 @@ export class SessionManager {
       }
       if (s.status !== 'reconnecting') this.setStatus(s, 'connecting');
 
-      // WhatsApp sends chat history once, right after a phone is linked. Accept it only until the
-      // first successful connection; afterwards reconnects skip Baileys' wait for history entirely.
-      const sessionRow = await prisma.userSession.findUnique({
-        where: { id: s.id },
-        select: { historyCheckedAt: true },
-      });
-      const acceptHistory = !sessionRow?.historyCheckedAt;
-      const HS = proto.HistorySync.HistorySyncType;
-
       const version = await this.getVersion();
       const sock = makeWASocket({
         ...(version ? { version } : {}),
@@ -286,14 +256,13 @@ export class SessionManager {
         logger,
         browser: Browsers.macOS('Desktop'),
         markOnlineOnConnect: false,
-        // Never ask for the full archive. Recent chat history (INITIAL_BOOTSTRAP / RECENT) is only
-        // accepted on a fresh link, and only counts and timestamps are kept from it (smart groups).
-        // On reconnects only the small PUSH_NAME list is accepted, so there's no history wait.
-        // The address book itself is fetched directly — see scheduleAddressBookSync().
+        // Download no chat history at all — no chats, no messages, not even the profile-name list.
+        // History sync is the slow part of linking (the phone uploads and Baileys decrypts it), and
+        // with it disabled Baileys also skips its up-to-20 s wait for history on every connect.
+        // The address book is fetched directly (scheduleAddressBookSync), and WhatsApp profile
+        // names still arrive live through contacts.update.
         syncFullHistory: false,
-        shouldSyncHistoryMessage: (msg) =>
-          msg.syncType === HS.PUSH_NAME ||
-          (acceptHistory && (msg.syncType === HS.INITIAL_BOOTSTRAP || msg.syncType === HS.RECENT)),
+        shouldSyncHistoryMessage: () => false,
         generateHighQualityLinkPreview: false,
       });
       s.sock = sock;
@@ -313,21 +282,6 @@ export class SessionManager {
         if (receipts.length > 0) for (const listener of this.statusListeners) listener(s.id, receipts);
       });
       sock.ev.on('contacts.update', (contacts) => this.queueContactSync(s.id, contacts));
-      sock.ev.on('messaging-history.set', ({ contacts, chats, messages, syncType }) => {
-        if (syncType === HS.PUSH_NAME) {
-          this.queueContactSync(s.id, contacts);
-          return;
-        }
-        // Chat history: keep only the phone ↔ privacy-id mapping (chat names aren't address-book
-        // names), plus engagement counters. Message text is never stored.
-        this.queueContactSync(
-          s.id,
-          contacts.map((c) => ({ id: c.id, ...(('lid' in c && c.lid) ? { lid: c.lid } : {}), ...(('jid' in c && c.jid) ? { jid: c.jid } : {}) })),
-        );
-        recordHistory(s.id, chats, messages, s.user?.jid ?? null);
-      });
-      // Live engagement: messages sent or received from now on (this app's broadcasts excluded).
-      sock.ev.on('messages.upsert', ({ messages }) => recordLive(s.id, messages, s.user?.jid ?? null));
     } catch (err) {
       console.error(`[session:${s.id}] failed to open socket:`, errorMessage(err));
       s.starting = false;
@@ -367,7 +321,6 @@ export class SessionManager {
           phoneNumber: s.user?.phoneNumber ?? null,
           name: s.user?.name ?? null,
           status: 'CONNECTED',
-          historyCheckedAt: new Date(),
         },
       });
       this.setStatus(s, 'connected');
@@ -394,15 +347,6 @@ export class SessionManager {
       this.planAddressBookSync(s, sock).catch((err: unknown) =>
         console.warn(`[session:${s.id}] could not plan address book sync:`, errorMessage(err)),
       );
-      // Link privacy-id chats to contacts once the address book and any chat history have arrived.
-      for (const delay of LID_RESOLVE_DELAYS_MS) {
-        setTimeout(() => {
-          if (s.sock !== sock || s.status !== 'connected') return;
-          resolveLids(s.id, sock, 5 * 60_000).catch((err: unknown) =>
-            console.warn(`[session:${s.id}] privacy-id matching failed:`, errorMessage(err)),
-          );
-        }, delay).unref();
-      }
       return;
     }
 
@@ -628,7 +572,7 @@ export class SessionManager {
 
   private async syncContacts(sessionId: string, contacts: Array<Partial<WAContact>>): Promise<void> {
     const ownJid = this.sessions.get(sessionId)?.user?.jid;
-    const merged = new Map<string, { name: string | null; pushName: string | null; lid: string | null }>();
+    const merged = new Map<string, { name: string | null; pushName: string | null }>();
 
     let skipped = 0;
     for (const contact of contacts) {
@@ -643,7 +587,6 @@ export class SessionManager {
       merged.set(jid, {
         name: name ?? prev?.name ?? null,
         pushName: pushName ?? prev?.pushName ?? null,
-        lid: resolveLid(contact) ?? prev?.lid ?? null,
       });
     }
     if (skipped > 0) {
@@ -664,33 +607,25 @@ export class SessionManager {
         (
           await prisma.contact.findMany({
             where: { sessionId, jid: { in: chunk.map(([jid]) => jid) } },
-            select: { id: true, jid: true, name: true, pushName: true, lid: true },
+            select: { id: true, jid: true, name: true, pushName: true },
           })
         ).map((c) => [c.jid, c]),
       );
 
-      const toCreate: Array<{
-        sessionId: string;
-        jid: string;
-        phone: string;
-        name: string | null;
-        pushName: string | null;
-        lid: string | null;
-      }> = [];
-      const toUpdate: Array<{ id: string; data: { name?: string; pushName?: string; lid?: string } }> = [];
+      const toCreate: Array<{ sessionId: string; jid: string; phone: string; name: string | null; pushName: string | null }> = [];
+      const toUpdate: Array<{ id: string; data: { name?: string; pushName?: string } }> = [];
       for (const [jid, info] of chunk) {
         const existing = stored.get(jid);
         if (!existing) {
-          toCreate.push({ sessionId, jid, phone: jidToPhone(jid), name: info.name, pushName: info.pushName, lid: info.lid });
+          toCreate.push({ sessionId, jid, phone: jidToPhone(jid), name: info.name, pushName: info.pushName });
           if (info.name) newlySaved.push(jid);
           continue;
         }
         // Only touch rows whose names actually changed, and never blank out a known name.
-        const data: { name?: string; pushName?: string; lid?: string } = {};
+        const data: { name?: string; pushName?: string } = {};
         if (info.name && info.name !== existing.name) data.name = info.name;
         if (info.pushName && info.pushName !== existing.pushName) data.pushName = info.pushName;
-        if (info.lid && info.lid !== existing.lid) data.lid = info.lid;
-        if (Object.keys(data).length > 0) toUpdate.push({ id: existing.id, data });
+        if (data.name !== undefined || data.pushName !== undefined) toUpdate.push({ id: existing.id, data });
         if (info.name && existing.name === null) newlySaved.push(jid);
       }
 

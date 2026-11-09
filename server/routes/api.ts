@@ -11,9 +11,12 @@ import { prisma } from '../db';
 import type { Dispatcher } from '../queue/dispatcher';
 import { queueItemToLog, toCampaignDTO } from '../serializers';
 import { removeUpload, upload } from '../upload';
-import { analyzeContacts, applySmartGroups, readSmartSettings } from '../services/contactCategorizer';
-import { resolveLids } from '../services/lidResolver';
-import { detectMediaKind, IMAGE_MAX_INPUT_BYTES } from '../services/mediaCompressor';
+import {
+  detectMediaKind,
+  IMAGE_MAX_INPUT_BYTES,
+  ORIGINAL_IMAGE_MAX_BYTES,
+  ORIGINAL_VIDEO_MAX_BYTES,
+} from '../services/mediaCompressor';
 import {
   deleteMediaFile,
   getMediaJob,
@@ -40,12 +43,9 @@ import {
   type ContactDTO,
   type DraftDTO,
   type GroupDTO,
-  type SmartCategory,
 } from '../../src/lib/types';
 
 const MAX_TEMPLATE_LENGTH = 4096;
-
-const isSmartCategory = (v: unknown): v is SmartCategory => v === 'frequent' || v === 'chatted' || v === 'cold';
 const MAX_GROUP_NAME_LENGTH = 80;
 const LOG_HISTORY_LIMIT = 500;
 
@@ -92,7 +92,6 @@ function toGroupDTO(group: {
   id: string;
   name: string;
   autoAddNew: boolean;
-  smartKey: string | null;
   createdAt: Date;
   contacts: Array<{ id: string }>;
 }): GroupDTO {
@@ -101,7 +100,6 @@ function toGroupDTO(group: {
     name: group.name,
     contactIds: group.contacts.map((c) => c.id),
     autoAddNew: group.autoAddNew,
-    smartKey: isSmartCategory(group.smartKey) ? group.smartKey : null,
     createdAt: group.createdAt.toISOString(),
   };
 }
@@ -163,8 +161,6 @@ export function createApiRouter(deps: {
         pushName: c.pushName,
         phone: c.phone,
         groupIds: c.groups.map((g) => g.id),
-        chatCategory: isSmartCategory(c.chatCategory) ? c.chatCategory : null,
-        lastChatAt: c.lastChatAt ? c.lastChatAt.toISOString() : null,
       }));
       res.json(payload);
     }),
@@ -186,29 +182,6 @@ export function createApiRouter(deps: {
         throw new HttpError(409, 'WhatsApp is not connected right now. Try again once it shows Connected.');
       }
       res.json(await sessions.syncAddressBook(req.params.sessionId));
-    }),
-  );
-
-  // --- Smart groups ------------------------------------------------------------
-
-  /** Preview: how contacts would be split with the given settings (nothing is changed). */
-  router.get(
-    '/sessions/:sessionId/smart-groups',
-    ah(async (req, res) => {
-      const { members: _members, ...analysis } = await analyzeContacts(req.params.sessionId, readSmartSettings(req.query));
-      res.json(analysis);
-    }),
-  );
-
-  /** One click: create/refresh ⚡ Frequent, 💬 Chatted Before and 📇 Cold groups. */
-  router.post(
-    '/sessions/:sessionId/smart-groups',
-    ah(async (req, res) => {
-      const { sessionId } = req.params;
-      // Link any privacy-id chats to contacts first (bounded so the request stays short).
-      const sock = sessions.getConnectedSocket(sessionId);
-      if (sock) await resolveLids(sessionId, sock, 40_000).catch(() => undefined);
-      res.json(await applySmartGroups(sessionId, readSmartSettings(req.body)));
     }),
   );
 
@@ -460,15 +433,26 @@ export function createApiRouter(deps: {
         await removeUpload(file.path);
         throw new HttpError(400, 'Unsupported file type.');
       }
-      if (kind === 'image' && file.size > IMAGE_MAX_INPUT_BYTES) {
+      // "compress" form field: anything but "false" means compress (the default).
+      const compress = (req.body as Record<string, unknown>)?.compress !== 'false';
+      const limit = compress
+        ? kind === 'image' ? IMAGE_MAX_INPUT_BYTES : null
+        : kind === 'image' ? ORIGINAL_IMAGE_MAX_BYTES : ORIGINAL_VIDEO_MAX_BYTES;
+      if (limit !== null && file.size > limit) {
         await removeUpload(file.path);
-        throw new HttpError(400, 'Images can be up to 25 MB.');
+        throw new HttpError(
+          400,
+          compress
+            ? 'Images can be up to 25 MB.'
+            : `To send ${kind === 'image' ? 'an image' : 'a video'} as-is it must be under ${Math.round(limit / 1048576)} MB. Choose “Compress” instead.`,
+        );
       }
       const job = startMediaJob({
         sessionId: req.params.sessionId,
         uploadPath: file.path,
         kind,
         originalName: file.originalname.slice(0, 200),
+        compress,
       });
       res.status(202).json(job);
     }),

@@ -51,6 +51,11 @@ const VIDEO_EXT = /\.(mp4|mov|mkv)$/i;
 const IMAGE_MAX = 25 * 1024 * 1024;
 const VIDEO_MAX = 500 * 1024 * 1024;
 const ACCEPT = 'image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/x-matroska,.mkv,.mov';
+// "Send original": what WhatsApp accepts as a normal photo / video message, unchanged.
+const ORIGINAL_IMAGE_MAX = 16 * 1024 * 1024;
+const ORIGINAL_VIDEO_MAX = 64 * 1024 * 1024;
+const ACCEPT_ORIGINAL = 'image/jpeg,image/png,image/webp,video/mp4,.mp4';
+const COMPRESS_PREF_KEY = 'festival-broadcaster.compress-media';
 const DRAFT_SAVE_DELAY_MS = 800;
 const EMOJIS = ['🪔', '✨', '🎆', '🎇', '🙏', '🌸', '🍬', '❤️', '🎉', '🕉️'];
 
@@ -85,6 +90,24 @@ export function BroadcastComposer({
   const [template, setTemplate] = useState(DEFAULT_TEMPLATE);
   const [media, setMedia] = useState<MediaInfo | null>(null);
   const [upload, setUpload] = useState<UploadState | null>(null);
+  const [compress, setCompress] = useState(true);
+
+  // Remember the compress / original choice in this browser.
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(COMPRESS_PREF_KEY) === 'false') setCompress(false);
+    } catch {
+      // storage unavailable
+    }
+  }, []);
+  const chooseCompress = (value: boolean) => {
+    setCompress(value);
+    try {
+      window.localStorage.setItem(COMPRESS_PREF_KEY, String(value));
+    } catch {
+      // storage unavailable
+    }
+  };
   const [sendMode, setSendMode] = useState<'now' | 'schedule'>('now');
   const [scheduleLocal, setScheduleLocal] = useState('');
   const [quietHours, setQuietHours] = useState<QuietHoursSettings | null>(null);
@@ -186,12 +209,6 @@ export function BroadcastComposer({
   const recipients = group?.contactIds.length ?? 0;
   const contactById = useMemo(() => new Map(contacts.map((c) => [c.id, c])), [contacts]);
   const previewUrl = media ? `/uploads/${media.file}` : null;
-
-  // Cold-contact safeguard: recipients who have never chatted with this account.
-  const coldCount = useMemo(
-    () => (group ? group.contactIds.filter((id) => contactById.get(id)?.chatCategory === 'cold').length : 0),
-    [group, contactById],
-  );
   const isVideo = media?.mediaType === 'video';
 
   const sampleContact = useMemo(() => {
@@ -309,10 +326,22 @@ export function BroadcastComposer({
       setError('Attach a JPG, PNG or WebP image, or an MP4, MOV or MKV video.');
       return;
     }
-    if (kind === 'image' && chosen.size > IMAGE_MAX) return setError('Images can be up to 25 MB.');
-    if (kind === 'video' && chosen.size > VIDEO_MAX) return setError('Videos can be up to 500 MB before compression.');
+    if (compress) {
+      if (kind === 'image' && chosen.size > IMAGE_MAX) return setError('Images can be up to 25 MB.');
+      if (kind === 'video' && chosen.size > VIDEO_MAX) return setError('Videos can be up to 500 MB before compression.');
+    } else {
+      if (kind === 'video' && !/\.mp4$/i.test(chosen.name)) {
+        return setError('To send a video as-is it must be an MP4. Choose “Compress” for MOV or MKV videos.');
+      }
+      if (kind === 'image' && chosen.size > ORIGINAL_IMAGE_MAX) {
+        return setError('Original images can be up to 16 MB. Choose “Compress” for this photo.');
+      }
+      if (kind === 'video' && chosen.size > ORIGINAL_VIDEO_MAX) {
+        return setError('Original videos can be up to 64 MB. Choose “Compress” for this video.');
+      }
+    }
 
-    const { promise, cancel } = uploadMedia(sessionId, chosen, (percent) => {
+    const { promise, cancel } = uploadMedia(sessionId, chosen, compress, (percent) => {
       const u = uploadRef.current;
       if (u && u.phase === 'uploading') setUploadState({ ...u, percent });
     });
@@ -563,21 +592,63 @@ export function BroadcastComposer({
                   {isVideo ? <Video className="h-4 w-4" /> : <ImageIcon className="h-4 w-4" />}
                   {media.originalName}
                 </p>
-                <p className="mt-1 text-xs text-stone-600">
-                  Compressed <span className="line-through opacity-70">{formatBytes(media.originalSize)}</span> →{' '}
-                  <strong className="text-emerald-700">{formatBytes(media.size)}</strong>
-                </p>
+                {media.compressed === false ? (
+                  <p className="mt-1 text-xs text-stone-600">
+                    Original, not compressed · <strong className="text-stone-800">{formatBytes(media.size)}</strong>
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-stone-600">
+                    Compressed <span className="line-through opacity-70">{formatBytes(media.originalSize)}</span> →{' '}
+                    <strong className="text-emerald-700">{formatBytes(media.size)}</strong>
+                  </p>
+                )}
                 <p className="text-xs text-stone-500">
                   {media.width && media.height ? `${media.width}×${media.height}` : ''}
                   {media.durationSec ? ` · ${formatDuration(media.durationSec * 1000)}` : ''}
-                  {isVideo ? ' · H.264 MP4' : ' · JPEG, metadata removed'}
+                  {media.compressed === false
+                    ? ` · ${media.mimeType.replace(/^\w+\//, '').toUpperCase()}`
+                    : isVideo
+                      ? ' · H.264 MP4'
+                      : ' · JPEG, metadata removed'}
                 </p>
+                {media.note && <p className="mt-1 text-xs text-amber-700">{media.note}</p>}
+                {media.compressed === false && media.size > 5 * 1024 * 1024 && (
+                  <p className="mt-1 text-xs text-amber-700">
+                    Large file: it is uploaded once per recipient, so sending takes longer and may fail on slow
+                    connections.
+                  </p>
+                )}
               </div>
               <button type="button" className="btn-ghost p-1.5" onClick={removeMedia} title="Remove attachment">
                 <X className="h-4 w-4" />
               </button>
             </div>
           ) : (
+            <>
+            <div className="mb-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How to send the attachment">
+              <label
+                className={`flex cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
+                  compress ? 'border-diya-400 bg-diya-50/60' : 'border-stone-200'
+                }`}
+              >
+                <input type="radio" name="compress-mode" className="mt-0.5 accent-diya-500" checked={compress} onChange={() => chooseCompress(true)} />
+                <span>
+                  <span className="block text-sm font-medium text-stone-800">Compress (recommended)</span>
+                  Smaller files send faster and more reliably to every recipient.
+                </span>
+              </label>
+              <label
+                className={`flex cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
+                  !compress ? 'border-diya-400 bg-diya-50/60' : 'border-stone-200'
+                }`}
+              >
+                <input type="radio" name="compress-mode" className="mt-0.5 accent-diya-500" checked={!compress} onChange={() => chooseCompress(false)} />
+                <span>
+                  <span className="block text-sm font-medium text-stone-800">Send original</span>
+                  Exactly as uploaded: photos up to 16 MB, MP4 videos up to 64 MB.
+                </span>
+              </label>
+            </div>
             <button
               type="button"
               className="flex w-full flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-stone-200 px-4 py-6 text-sm text-stone-500 transition hover:border-diya-300 hover:bg-diya-50/40"
@@ -587,14 +658,17 @@ export function BroadcastComposer({
                 <Paperclip className="h-4 w-4" /> Attach an image or video
               </span>
               <span className="text-xs text-stone-400">
-                JPG/PNG/WebP up to 25 MB · MP4/MOV/MKV up to 500 MB — compressed automatically
+                {compress
+                  ? 'JPG/PNG/WebP up to 25 MB · MP4/MOV/MKV up to 500 MB — compressed automatically'
+                  : 'JPG/PNG/WebP up to 16 MB · MP4 up to 64 MB — sent unchanged'}
               </span>
             </button>
+            </>
           )}
           <input
             ref={fileInputRef}
             type="file"
-            accept={ACCEPT}
+            accept={compress ? ACCEPT : ACCEPT_ORIGINAL}
             className="hidden"
             onChange={(e) => onFileChosen(e.target.files?.[0] ?? null)}
           />
@@ -772,19 +846,6 @@ export function BroadcastComposer({
               {startAt ? startAt.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Right away'}
             </strong>
           </div>
-          {coldCount > 0 && (
-            <p
-              className={`rounded-lg px-3 py-2 text-xs ${
-                group?.smartKey === 'cold' || coldCount >= recipients / 2 ? 'bg-rose-50 text-rose-800' : 'bg-amber-50 text-amber-800'
-              }`}
-            >
-              <strong>
-                📇 {coldCount === recipients ? 'All' : coldCount} of {recipients} recipients have never chatted with you.
-              </strong>{' '}
-              Bulk messages to cold contacts are the most common cause of WhatsApp bans. Consider sending to ⚡ Frequent and 💬
-              Chatted Before first.
-            </p>
-          )}
           {touchesQuiet && quietHours && (
             <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800">
               This run overlaps quiet hours ({describeWindow(quietHours)}). It pauses then and continues at{' '}
@@ -829,7 +890,6 @@ export function BroadcastComposer({
         recipients={recipients}
         variations={variations}
         media={media}
-        coldCount={coldCount}
         startAt={startAt}
         quietHours={touchesQuiet ? quietHours : null}
         preview={preview}
