@@ -12,6 +12,7 @@ import {
   Italic,
   Loader2,
   Moon,
+  Palette,
   Paperclip,
   Send,
   Shuffle,
@@ -24,7 +25,20 @@ import {
 import { SummaryModal } from './SummaryModal';
 import { api, uploadMedia } from '@/lib/api';
 import { contactDisplayName, formatBytes, formatRelative } from '@/lib/format';
-import { estimateDurationMs, formatDuration } from '@/lib/pacing';
+import { estimateDurationMs, formatDuration, isPacingMode, PACING_MODES, PACING_PROFILES, type PacingMode } from '@/lib/pacing';
+import {
+  CATEGORY_LABELS,
+  describeDaysAway,
+  getOccasion,
+  isOccasionId,
+  LANGUAGE_LABELS,
+  OCCASIONS,
+  upcomingOccasions,
+  type Occasion,
+  type OccasionCategory,
+  type TemplateLanguage,
+  type UpcomingOccasion,
+} from '@/lib/occasions';
 import { describeWindow, runTouchesQuietHours, toLocalInputValue } from '@/lib/quiet-hours';
 import { getSocket } from '@/lib/socket';
 import { TEMPLATE_VARIABLES, countVariations, renderMessage, validateTemplate } from '@/lib/spintax';
@@ -37,13 +51,16 @@ interface BroadcastComposerProps {
   connected: boolean;
   onCreated: (campaign: CampaignDTO) => void;
   onGoToContacts: () => void;
+  /** Set by the dashboard's "upcoming festival" banner; a new nonce applies it. */
+  occasionRequest?: { id: string; nonce: number } | null;
 }
 
-const DEFAULT_TEMPLATE = `{Happy Diwali|Wishing you a joyful Diwali|Warm Diwali greetings}, {{first_name}}! 🪔
-
-{May this festival of lights|May the glow of a thousand diyas} bring {joy, prosperity and good health|happiness and success} to you and your family. ✨
-
-{With love|Warm regards|Best wishes} 🙏`;
+// Start with the nearest upcoming occasion's template (e.g. Christmas in December).
+const FIRST_OCCASION: Occasion = upcomingOccasions(new Date(), 1)[0]?.occasion ?? OCCASIONS[0]!;
+const DEFAULT_TEMPLATE = FIRST_OCCASION.templates.en;
+/** True when the text is one of the built-in templates (so switching occasion can replace it safely). */
+const isStockTemplate = (text: string): boolean =>
+  !text.trim() || OCCASIONS.some((o) => Object.values(o.templates).includes(text));
 
 const MAX_TEMPLATE = 4096;
 const IMAGE_EXT = /\.(jpe?g|png|webp)$/i;
@@ -57,11 +74,11 @@ const ORIGINAL_VIDEO_MAX = 64 * 1024 * 1024;
 const ACCEPT_ORIGINAL = 'image/jpeg,image/png,image/webp,video/mp4,.mp4';
 const COMPRESS_PREF_KEY = 'festival-broadcaster.compress-media';
 const DRAFT_SAVE_DELAY_MS = 800;
-const EMOJIS = ['🪔', '✨', '🎆', '🎇', '🙏', '🌸', '🍬', '❤️', '🎉', '🕉️'];
+const BASE_EMOJIS = ['✨', '🎉', '🙏', '🌸', '❤️', '🎁', '🍬', '🌟', '💐'];
 
 const SPINTAX_SNIPPETS = [
-  { label: 'Greeting', text: '{Happy Diwali|Wishing you a joyful Diwali|Warm Diwali greetings}' },
-  { label: 'Blessing', text: '{May this Diwali bring|Wishing you} {joy|prosperity|happiness}' },
+  { label: 'Greeting', text: '{Hi|Hello|Namaste} {{first_name}}' },
+  { label: 'Wish', text: '{Wishing you|Sending you} {joy|happiness|good health|lots of love}' },
   { label: 'Sign-off', text: '{With love|Warm regards|Best wishes}' },
 ];
 
@@ -84,10 +101,20 @@ export function BroadcastComposer({
   connected,
   onCreated,
   onGoToContacts,
+  occasionRequest = null,
 }: BroadcastComposerProps) {
   const [groupId, setGroupId] = useState<string>('');
   const [campaignName, setCampaignName] = useState('');
   const [template, setTemplate] = useState(DEFAULT_TEMPLATE);
+  const [occasionId, setOccasionId] = useState<string>(FIRST_OCCASION.id);
+  const [language, setLanguage] = useState<TemplateLanguage>('en');
+  const [pacing, setPacing] = useState<PacingMode>('careful');
+  const [card, setCard] = useState<{ title: string; subtitle: string } | null>(null);
+  const [cardBusy, setCardBusy] = useState(false);
+  const occasion = getOccasion(occasionId) ?? FIRST_OCCASION;
+  // Browser-only (today's date and the viewer's locale), so server and client HTML match.
+  const [upcoming, setUpcoming] = useState<UpcomingOccasion[]>([]);
+  useEffect(() => setUpcoming(upcomingOccasions(new Date(), 4)), []);
   const [media, setMedia] = useState<MediaInfo | null>(null);
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [compress, setCompress] = useState(true);
@@ -136,6 +163,9 @@ export function BroadcastComposer({
           setCampaignName(d.name);
           setTemplate(d.messageTemplate);
           setMedia(d.media);
+          if (isOccasionId(d.occasion)) setOccasionId(d.occasion);
+          if (d.language === 'hi' || d.language === 'hinglish' || d.language === 'en') setLanguage(d.language);
+          if (isPacingMode(d.pacing)) setPacing(d.pacing);
           if (d.scheduledAt && new Date(d.scheduledAt).getTime() > Date.now()) {
             setSendMode('schedule');
             setScheduleLocal(toLocalInputValue(new Date(d.scheduledAt)));
@@ -171,8 +201,11 @@ export function BroadcastComposer({
       messageTemplate: template,
       mediaFile: media?.file ?? null,
       scheduledAt: scheduledAtIso,
+      occasion: occasionId,
+      language,
+      pacing,
     }),
-    [groupId, campaignName, template, media, scheduledAtIso],
+    [groupId, campaignName, template, media, scheduledAtIso, occasionId, language, pacing],
   );
 
   useEffect(() => {
@@ -368,7 +401,7 @@ export function BroadcastComposer({
   // ---- Schedule & quiet hours ----------------------------------------------------------
 
   const startAt = scheduledAtIso ? new Date(scheduledAtIso) : null;
-  const etaMs = estimateDurationMs(recipients);
+  const etaMs = estimateDurationMs(recipients, pacing);
   const touchesQuiet = quietHours ? runTouchesQuietHours(startAt ?? new Date(), etaMs, quietHours) : false;
 
   const saveQuiet = async () => {
@@ -379,6 +412,43 @@ export function BroadcastComposer({
       setQuietEdit(null);
     } catch (err) {
       setQuietError(err instanceof Error ? err.message : 'Could not save quiet hours.');
+    }
+  };
+
+  // ---- Occasion, templates and e-cards -------------------------------------------------
+
+  /** Switch occasion/language; replace the text only if it's still an unedited built-in template. */
+  const chooseOccasion = (id: string, lang: TemplateLanguage = language, force = false) => {
+    const next = getOccasion(id);
+    if (!next) return;
+    setOccasionId(id);
+    setLanguage(lang);
+    setCard(null);
+    if (force || isStockTemplate(template)) setTemplate(next.templates[lang]);
+  };
+
+  // "Start a … broadcast" from the dashboard banner.
+  useEffect(() => {
+    if (!occasionRequest || draftStatus === 'loading') return;
+    chooseOccasion(occasionRequest.id, language, true);
+    // Only react to new requests.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [occasionRequest?.nonce, draftStatus === 'loading']);
+
+  const createCard = async () => {
+    if (!card) return;
+    setCardBusy(true);
+    setError(null);
+    try {
+      const made = await api.createECard(sessionId, { occasion: occasion.id, title: card.title, subtitle: card.subtitle });
+      const previous = mediaRef.current;
+      setMedia(made);
+      if (previous && previous.file !== made.file) void api.deleteMedia(sessionId, previous.file);
+      setCard(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create the e-card.');
+    } finally {
+      setCardBusy(false);
     }
   };
 
@@ -405,6 +475,8 @@ export function BroadcastComposer({
         name: campaignName.trim() || undefined,
         mediaFile: media?.file ?? null,
         scheduledAt: sendMode === 'schedule' ? scheduledAtIso : null,
+        pacing,
+        occasion: occasionId,
       });
       setModalOpen(false);
       // The server cleared the draft; start the next one fresh (the template is kept for reuse).
@@ -426,7 +498,7 @@ export function BroadcastComposer({
         <Users className="h-10 w-10 text-diya-400" />
         <h2 className="text-lg font-semibold">Create a contact group first</h2>
         <p className="max-w-md text-sm text-stone-500">
-          Broadcasts are sent to a saved group such as “Diwali - Family”. Pick contacts and save a group, then come back
+          Broadcasts are sent to a saved group such as “Family” or “Colleagues”. Pick contacts and save a group, then come back
           here.
         </p>
         <button type="button" className="btn-primary" onClick={onGoToContacts}>
@@ -439,6 +511,73 @@ export function BroadcastComposer({
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
       <section className="card flex flex-col gap-5 p-6">
+        <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="min-w-[200px] flex-1">
+              <span className="mb-1.5 block text-sm font-medium text-stone-700">Occasion</span>
+              <select id="occasion" className="input" value={occasionId} onChange={(e) => chooseOccasion(e.target.value)}>
+                {(Object.keys(CATEGORY_LABELS) as OccasionCategory[]).map((cat) => (
+                  <optgroup key={cat} label={CATEGORY_LABELS[cat]}>
+                    {OCCASIONS.filter((o) => o.category === cat).map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.emoji} {o.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="mb-1.5 block text-sm font-medium text-stone-700">Language</span>
+              <select
+                id="language"
+                className="input w-auto"
+                value={language}
+                onChange={(e) => chooseOccasion(occasionId, e.target.value as TemplateLanguage)}
+              >
+                {(Object.keys(LANGUAGE_LABELS) as TemplateLanguage[]).map((l) => (
+                  <option key={l} value={l}>
+                    {LANGUAGE_LABELS[l]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => chooseOccasion(occasionId, language, true)}
+              title="Replace the message with this occasion's template"
+            >
+              <Sparkles className="h-4 w-4" /> Use template
+            </button>
+          </div>
+          {upcoming.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-stone-500">Coming up:</span>
+              {upcoming.map((u) => (
+                <button
+                  key={u.occasion.id}
+                  type="button"
+                  className={`chip ring-1 transition ${
+                    u.occasion.id === occasionId ? 'bg-diya-100 text-diya-800 ring-diya-300' : 'bg-surface text-stone-700 ring-stone-200 hover:bg-stone-100'
+                  }`}
+                  onClick={() => chooseOccasion(u.occasion.id, language, true)}
+                  title={u.approximate ? 'Date varies by region and year — please double-check' : undefined}
+                >
+                  {u.occasion.emoji} {u.occasion.name} · {describeDaysAway(u.daysAway)}
+                  {' '}({u.approximate ? '≈ ' : ''}
+                  {u.date.toLocaleDateString([], { day: 'numeric', month: 'short' })})
+                </button>
+              ))}
+            </div>
+          )}
+          {!isStockTemplate(template) && (
+            <p className="mt-2 text-[11px] text-stone-500">
+              Your edited message stays as it is when you switch occasion — click “Use template” to replace it.
+            </p>
+          )}
+        </div>
+
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-stone-700">Send to group</span>
@@ -456,7 +595,7 @@ export function BroadcastComposer({
             </span>
             <input
               className="input"
-              placeholder="Diwali 2026 – Family"
+              placeholder={`${occasion.name} ${new Date().getFullYear()} – Family`}
               value={campaignName}
               maxLength={120}
               onChange={(e) => setCampaignName(e.target.value)}
@@ -500,7 +639,7 @@ export function BroadcastComposer({
                 </button>
               ))}
               <span className="mx-1 h-5 w-px bg-stone-200" />
-              {EMOJIS.map((emoji) => (
+              {[occasion.emoji, ...BASE_EMOJIS.filter((e) => e !== occasion.emoji)].map((emoji) => (
                 <button
                   key={emoji}
                   type="button"
@@ -625,6 +764,51 @@ export function BroadcastComposer({
             </div>
           ) : (
             <>
+            {card ? (
+              <div className="mb-3 rounded-xl border border-diya-200 bg-diya-50/50 p-3">
+                <p className="mb-2 text-sm font-medium text-stone-800">
+                  {occasion.emoji} {occasion.name} e-card
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input
+                    id="card-title"
+                    className="input"
+                    maxLength={40}
+                    value={card.title}
+                    onChange={(e) => setCard({ ...card, title: e.target.value })}
+                    aria-label="Card title"
+                  />
+                  <input
+                    id="card-subtitle"
+                    className="input"
+                    maxLength={80}
+                    placeholder="Sign-off, e.g. From the Sharma family"
+                    value={card.subtitle}
+                    onChange={(e) => setCard({ ...card, subtitle: e.target.value })}
+                    aria-label="Card sign-off"
+                  />
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <button type="button" className="btn-primary" disabled={cardBusy || !card.title.trim()} onClick={() => void createCard()}>
+                    {cardBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Palette className="h-4 w-4" />} Create card
+                  </button>
+                  <button type="button" className="btn-ghost" onClick={() => setCard(null)}>
+                    Cancel
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] text-stone-500">
+                  Everyone gets the same card (it's uploaded once); the caption below stays personalised.
+                </p>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn-secondary mb-3 w-full"
+                onClick={() => setCard({ title: occasion.card.title[language === 'hi' ? 'hi' : 'en'], subtitle: '' })}
+              >
+                <Palette className="h-4 w-4" /> Create a {occasion.name} e-card
+              </button>
+            )}
             <div className="mb-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How to send the attachment">
               <label
                 className={`flex cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
@@ -675,6 +859,33 @@ export function BroadcastComposer({
         </div>
 
         <div>
+          <span className="mb-1.5 block text-sm font-medium text-stone-700">Sending speed</span>
+          <div className="mb-4 grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Sending speed">
+            {PACING_MODES.map((mode) => (
+              <label
+                key={mode}
+                className={`flex cursor-pointer flex-col gap-1 rounded-xl border px-3 py-2.5 text-xs ${
+                  pacing === mode ? 'border-diya-400 bg-diya-50/60' : 'border-stone-200'
+                }`}
+              >
+                <span className="flex items-center gap-2 text-sm font-medium text-stone-800">
+                  <input type="radio" name="pacing" className="accent-diya-500" checked={pacing === mode} onChange={() => setPacing(mode)} />
+                  {PACING_PROFILES[mode].label}
+                  <span className="ml-auto text-xs font-normal text-stone-500">
+                    ~{formatDuration(estimateDurationMs(Math.max(recipients, 1), mode))}
+                  </span>
+                </span>
+                <span className="text-stone-500">{PACING_PROFILES[mode].summary}</span>
+              </label>
+            ))}
+          </div>
+          {pacing !== 'careful' && (
+            <p className="-mt-2 mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Faster sending finishes sooner but raises the chance of WhatsApp restricting your number — no pacing can
+              hide automation. It matters most with large groups or contacts who don&apos;t know you.
+            </p>
+          )}
+
           <span className="mb-1.5 block text-sm font-medium text-stone-700">When to send</span>
           <div className="grid gap-2 sm:grid-cols-2">
             <label
@@ -890,6 +1101,7 @@ export function BroadcastComposer({
         recipients={recipients}
         variations={variations}
         media={media}
+        pacing={pacing}
         startAt={startAt}
         quietHours={touchesQuiet ? quietHours : null}
         preview={preview}

@@ -1,13 +1,14 @@
-# 🪔 Festival Broadcaster
+# 🎉 Festival Broadcaster
 
-A free, self-hosted web app for sending festival greetings (Diwali, Eid, Christmas, New Year…) to your own
-WhatsApp contacts. It links to your personal WhatsApp through the open-source multi-device protocol library
+A free, self-hosted web app for sending greetings for any festival or occasion (Diwali, Holi, Eid, Christmas,
+New Year, birthdays, anniversaries, wedding invitations…) to your own WhatsApp contacts. It links to your personal WhatsApp through the open-source multi-device protocol library
 [`@whiskeysockets/baileys`](https://github.com/WhiskeySockets/Baileys). It does not use the Meta Cloud API, Twilio or
 any paid service. The database is a local SQLite file, and the app needs no Redis or external server.
 
 > ⚠️ **Read this first.** Automating a personal WhatsApp account is against WhatsApp's Terms of Service. The
-> built-in pacing (one message at a time, random 8–18 s gaps, typing simulation, cooldowns, spintax) makes a
-> broadcast look much less like spam, but it **cannot guarantee your number won't be restricted or banned**. Only
+> built-in pacing (typing simulation, random gaps, rests and breaks, spintax) makes a broadcast look much less
+> like spam, but it **cannot guarantee your number won't be restricted or banned**: restrictions mostly come
+> from recipients reporting or blocking unexpected messages, and no pacing hides automation. Only
 > message people who know you and have your number saved, keep lists small, and consider using a secondary number.
 
 ---
@@ -167,6 +168,47 @@ docker run --rm -v festival-broadcaster_festival-data:/data -v "$PWD":/backup bu
   use a VPN (WireGuard, Tailscale) or a reverse proxy that adds its own login.
 - **One WhatsApp account per instance.** If you also run the app on your laptop, unlink one of
   them, or each will keep its own separate contacts and campaigns.
+
+## Occasions, templates and e-cards
+
+- **20 occasions:**
+  - **Indian:** Diwali, Holi, Raksha Bandhan, Janmashtami, Ganesh Chaturthi, Navratri, Dussehra, Makar Sankranti.
+  - **Global & religious:** New Year, Christmas, Easter, Thanksgiving, Eid ul-Fitr, Eid ul-Adha.
+  - **National:** Republic Day, Independence Day.
+  - **Personal:** Birthday, Anniversary, Wedding Invitation, General Announcement.
+
+  They're defined in [`src/lib/occasions.ts`](src/lib/occasions.ts).
+- **Templates:** every occasion has templates in **English, हिन्दी and Hinglish**, with spintax and `{{first_name}}`.
+  Switching occasion or language replaces the message only while it's still an unedited template. *Use template*
+  always replaces it.
+- **Upcoming detector:** the dashboard suggests the nearest festival within two months, with a one-click *Start a …
+  broadcast*. The composer shows the next four as "Coming up" chips.
+- **Dates:** fixed-date occasions are exact, and Easter and Thanksgiving are calculated. Festivals that follow lunar
+  calendars (Diwali, Holi, Eid…) move each year and can differ by a day between regions. Their 2026–2028 dates are a
+  best-effort table, marked **≈** in the app, so check them before scheduling and extend the table for later years.
+- **E-cards:** *Create a … e-card* draws a 1080×1350 card with sharp. It has an occasion-specific motif (diyas, colour
+  splashes, fireworks, bells, kites, tricolour, crescent moon, flowers, leaves, balloons, hearts, mandala, confetti),
+  a title in English or Hindi and an optional sign-off. Everyone gets the same card (it's uploaded once), and the
+  caption stays personalised. The Docker image includes Latin and Devanagari fonts for this.
+
+## Sending speed
+
+Choose a pacing preset in the composer. The time estimates use the same numbers the sender does.
+
+| Preset | Rhythm | ~300 contacts |
+|---|---|---|
+| **Careful** (default) | One by one, 8–18 s apart, 1-minute break every 25 | ~1 h 30 m |
+| **Balanced** | Bursts of 3–5 messages 3–6 s apart, then a 20–40 s rest; 90 s break every 40 | ~1 h 15 m |
+| **Fast** | Bursts of 3–6 messages 2–4 s apart, then a 20–45 s rest; 90 s break every 50 | ~1 h 5 m |
+
+**Attachments are uploaded once per campaign.** The socket has a Baileys `mediaCache`, so the first send encrypts
+and uploads the file. Every later send reuses the stored pointer (CDN URL, `mediaKey`, `fileEncSha256`, `fileSha256`,
+length, thumbnail) without uploading again. Entries expire after 6 hours, and a failed send drops the entry so the next
+send re-uploads.
+
+The app deliberately does **not** add invisible "hash randomiser" characters. WhatsApp messages are end-to-end
+encrypted, so WhatsApp's servers never see or hash the text, and every encrypted message is already unique. Spintax is
+there for the people reading, not for filters.
 
 ## Media compression
 

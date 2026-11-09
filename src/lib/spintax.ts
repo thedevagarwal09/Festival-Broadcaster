@@ -1,7 +1,7 @@
 // Template rendering shared by the composer preview (browser) and the dispatcher (server).
 //
 // 1. Variables:  {{name}}, {{first_name}}, {{phone}}
-// 2. Spintax:    {Happy Diwali|Wishing you a joyful Diwali}  — nesting is supported:
+// 2. Spintax:    {Happy Holi|Wishing you a colourful Holi}  — nesting is supported:
 //                {Hi|Hello} {there|{{first_name}}}, {have a {great|lovely} day|enjoy}!
 //
 // Variables are substituted first so that `{{name}}` is never mistaken for a spintax group.

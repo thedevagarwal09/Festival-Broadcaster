@@ -38,7 +38,7 @@ interface ContactsManagerProps {
 type Filter = 'all' | 'named' | 'unnamed' | 'ungrouped' | 'selected' | `group:${string}`;
 
 const PAGE_SIZE = 200;
-const GROUP_SUGGESTIONS = ['Diwali - Family', 'Diwali - Friends', 'Diwali - Colleagues', 'Diwali - Clients'];
+const GROUP_SUGGESTIONS = ['Family', 'Close friends', 'Colleagues', 'Clients', 'Neighbours'];
 
 export function ContactsManager({
   sessionId,
@@ -216,7 +216,7 @@ export function ContactsManager({
           </p>
           <input
             className="input"
-            placeholder="e.g. Diwali - Family"
+            placeholder="e.g. Family"
             value={groupName}
             maxLength={80}
             onChange={(e) => setGroupName(e.target.value)}

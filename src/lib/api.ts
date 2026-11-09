@@ -5,10 +5,12 @@ import type {
   ContactSyncState,
   DraftDTO,
   GroupDTO,
+  MediaInfo,
   MediaJob,
   QuietHoursSettings,
   SessionSnapshot,
 } from './types';
+import type { PacingMode } from './pacing';
 
 export interface CreateCampaignInput {
   groupId: string;
@@ -18,6 +20,8 @@ export interface CreateCampaignInput {
   mediaFile?: string | null;
   /** ISO time to start; omit or null to send now. */
   scheduledAt?: string | null;
+  pacing?: PacingMode;
+  occasion?: string | null;
 }
 
 export interface DraftInput {
@@ -26,6 +30,9 @@ export interface DraftInput {
   messageTemplate: string;
   mediaFile: string | null;
   scheduledAt: string | null;
+  occasion: string | null;
+  language: string;
+  pacing: string;
 }
 
 /**
@@ -120,6 +127,8 @@ export const api = {
     fetch(`${base(sessionId)}/media/${encodeURIComponent(file)}`, { method: 'DELETE' }).then(() => undefined),
 
   draft: (sessionId: string) => request<DraftDTO>(`${base(sessionId)}/draft`),
+  createECard: (sessionId: string, card: { occasion: string; title: string; subtitle: string }) =>
+    request<MediaInfo>(`${base(sessionId)}/ecards`, json('POST', card)),
   saveDraft: (sessionId: string, draft: DraftInput) =>
     request<{ updatedAt: string }>(`${base(sessionId)}/draft`, json('PUT', draft)),
 

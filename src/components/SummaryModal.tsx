@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, CalendarClock, Clock, Loader2, Moon, Rocket, ShieldAlert, X } from 'lucide-react';
 import { formatBytes } from '@/lib/format';
-import { PACING, estimateDurationMs, formatDuration } from '@/lib/pacing';
+import { PACING_PROFILES, estimateDurationMs, formatDuration, type PacingMode } from '@/lib/pacing';
 import { describeWindow } from '@/lib/quiet-hours';
 import type { MediaInfo, QuietHoursSettings } from '@/lib/types';
 
@@ -13,6 +13,7 @@ interface SummaryModalProps {
   recipients: number;
   variations: number;
   media: MediaInfo | null;
+  pacing: PacingMode;
   /** Scheduled start, or null to start right away. */
   startAt: Date | null;
   /** Set when the run overlaps quiet hours. */
@@ -53,6 +54,7 @@ export function SummaryModal({
   recipients,
   variations,
   media,
+  pacing,
   startAt,
   quietHours,
   preview,
@@ -78,16 +80,17 @@ export function SummaryModal({
 
   if (!open) return null;
 
-  const avg = estimateDurationMs(recipients, 'avg');
-  const min = estimateDurationMs(recipients, 'min');
-  const max = estimateDurationMs(recipients, 'max');
+  const avg = estimateDurationMs(recipients, pacing, 'avg');
+  const min = estimateDurationMs(recipients, pacing, 'min');
+  const max = estimateDurationMs(recipients, pacing, 'max');
+  const profile = PACING_PROFILES[pacing];
   const start = startAt ?? new Date();
   const finishAt = new Date(start.getTime() + avg).toLocaleString([], {
     ...(startAt ? { weekday: 'short' } : {}),
     hour: '2-digit',
     minute: '2-digit',
   });
-  const cooldowns = Math.floor(Math.max(0, recipients - 1) / PACING.cooldownEvery);
+  const longBreaks = Math.floor(Math.max(0, recipients - 1) / profile.longRestEvery);
   const risk = riskLevel(recipients);
 
   return (
@@ -139,17 +142,19 @@ export function SummaryModal({
         <ul className="mt-4 space-y-1.5 rounded-xl border border-stone-100 p-4 text-xs text-stone-600">
           <li className="flex items-center gap-2">
             <Clock className="h-3.5 w-3.5 text-diya-500" />
-            One message at a time, {PACING.jitterMinMs / 1000}–{PACING.jitterMaxMs / 1000}s random gap between recipients
+            <strong className="text-stone-800">{profile.label} pacing:</strong> {profile.summary}
           </li>
           <li className="flex items-center gap-2">
             <Clock className="h-3.5 w-3.5 text-diya-500" />
-            “Typing…” shown for {PACING.typingMinMs / 1000}–{PACING.typingMaxMs / 1000}s before each message
+            “Typing…” shown for {profile.typingMinMs / 1000}–{profile.typingMaxMs / 1000}s before each message
+            {longBreaks > 0 ? ` · ${longBreaks} longer break${longBreaks === 1 ? '' : 's'} in this run` : ''}
           </li>
-          <li className="flex items-center gap-2">
-            <Clock className="h-3.5 w-3.5 text-diya-500" />
-            {PACING.cooldownMs / 1000}s cooldown after every {PACING.cooldownEvery} messages
-            {cooldowns > 0 ? ` (${cooldowns} in this run)` : ''}
-          </li>
+          {media && (
+            <li className="flex items-center gap-2">
+              <Clock className="h-3.5 w-3.5 text-diya-500" />
+              The {media.mediaType} is uploaded to WhatsApp once and reused for every recipient
+            </li>
+          )}
           <li className="flex items-center gap-2">
             <Clock className="h-3.5 w-3.5 text-diya-500" />
             {variations > 1_000_000 ? '1M+' : variations.toLocaleString()} possible text variation

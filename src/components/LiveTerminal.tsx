@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatBytes, formatClock, formatDateTime, jidToPhone } from '@/lib/format';
-import { estimateDurationMs, formatDuration } from '@/lib/pacing';
+import { estimateDurationMs, formatDuration, PACING_PROFILES } from '@/lib/pacing';
 import { getSocket } from '@/lib/socket';
 import type { CampaignDTO, CampaignLogEntry, CampaignStatus, LogLevel } from '@/lib/types';
 
@@ -193,7 +193,7 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
   // ETA from the real average gap between messages so far (it includes the jitter and cooldown
   // breaks). Clamped so a long pause (quiet hours, manual pause) doesn't distort it; falls back to
   // the pacing settings until two messages have gone out.
-  const pacingPerMessage = remaining > 0 ? estimateDurationMs(remaining) / remaining : 0;
+  const pacingPerMessage = remaining > 0 ? estimateDurationMs(remaining, campaign?.pacing ?? 'careful') / remaining : 0;
   const observed = campaign?.avgIntervalMs ?? null;
   const perMessage = observed
     ? Math.min(Math.max(observed, pacingPerMessage * 0.5), pacingPerMessage * 2.5)
@@ -252,6 +252,7 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
                   {campaign.mediaType
                     ? ` · with ${campaign.mediaType}${campaign.mediaSize ? ` (${formatBytes(campaign.mediaSize)})` : ''}`
                     : ''}
+                  {` · ${PACING_PROFILES[campaign.pacing].label.toLowerCase()} pacing`}
                   {' · '}
                   {status === 'SCHEDULED' && campaign.scheduledAt
                     ? `starts ${formatDateTime(campaign.scheduledAt)}`

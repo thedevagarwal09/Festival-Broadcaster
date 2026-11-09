@@ -1,5 +1,7 @@
 // Shared types used by both the Node server and the Next.js client.
 
+import type { PacingMode } from './pacing';
+
 export type SessionStatus =
   | 'idle' // no socket open (e.g. QR expired with nobody watching)
   | 'connecting' // opening the WhatsApp Web socket
@@ -75,6 +77,9 @@ export interface CampaignDTO {
   status: CampaignStatus;
   /** Start time for scheduled campaigns. */
   scheduledAt: string | null;
+  pacing: PacingMode;
+  /** Occasion id (see occasions.ts), if one was chosen. */
+  occasion: string | null;
   totalRecipients: number;
   /** Accepted by WhatsApp's server ("dispatched"). */
   sentCount: number;
@@ -129,6 +134,9 @@ export interface DraftDTO {
   messageTemplate: string;
   media: MediaInfo | null;
   scheduledAt: string | null;
+  occasion: string | null;
+  language: string;
+  pacing: string;
   updatedAt: string | null;
 }
 

@@ -89,6 +89,10 @@ model BroadcastCampaign {
   status          String    @default("PROCESSING")
   /// When a SCHEDULED campaign should start (null = started immediately)
   scheduledAt     DateTime?
+  /// Pacing preset: careful | balanced | fast (see src/lib/pacing.ts)
+  pacing          String    @default("careful")
+  /// Occasion this campaign is for (see src/lib/occasions.ts), e.g. diwali, birthday
+  occasion        String?
   totalRecipients Int
   sentCount       Int       @default(0)
   failedCount     Int       @default(0)
@@ -146,6 +150,10 @@ model Draft {
   media           String?
   /// Chosen start time when "Schedule" is selected
   scheduledAt     DateTime?
+  /// Occasion id, template language (en | hi | hinglish) and pacing preset chosen in the composer
+  occasion        String?
+  language        String    @default("en")
+  pacing          String    @default("careful")
   updatedAt       DateTime  @updatedAt
 
   session UserSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)

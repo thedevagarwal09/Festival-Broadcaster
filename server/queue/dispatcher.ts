@@ -10,9 +10,10 @@ import { errorMessage } from '../utils/errors';
 import { jidToPhone } from '../utils/jid';
 import { sleep } from '../utils/sleep';
 import type { SessionManager } from '../whatsapp/session-manager';
-import { PACING, randomBetween } from '../../src/lib/pacing';
+import { isPacingMode, PACING_PROFILES, randomBetween, type PacingMode } from '../../src/lib/pacing';
 import { renderMessage } from '../../src/lib/spintax';
 import { describeQuietHours, isQuietNow, quietHoursEnd } from '../services/quietHours';
+import { mediaCacheFor } from '../whatsapp/media-cache';
 import type { CampaignDTO, LogLevel } from '../../src/lib/types';
 
 /** Longest single sleep, so pause/abort/shutdown are noticed within a few seconds. */
@@ -22,6 +23,8 @@ const DISCONNECTED_POLL_MS = 5_000;
 const RECEIPT_DELIVERED = 3;
 const RECEIPT_READ = 4;
 const EARLY_RECEIPT_TTL_MS = 2 * 60_000;
+
+const pacingOf = (c: BroadcastCampaign): PacingMode => (isPacingMode(c.pacing) ? c.pacing : 'careful');
 
 /**
  * One worker per WhatsApp session, strictly one message at a time.
@@ -34,7 +37,8 @@ export class Dispatcher {
   private readonly workers = new Map<string, Promise<void>>();
   /** Earliest timestamp at which the next message for a session may be sent. */
   private readonly nextAllowedAt = new Map<string, number>();
-  private readonly sentSinceCooldown = new Map<string, number>();
+  /** Burst / long-break progress per WhatsApp account. */
+  private readonly paceState = new Map<string, { sinceLongRest: number; burstLeft: number }>();
   private readonly waitingForConnection = new Set<string>();
   /** Receipts that arrived before the sent message's id was saved. */
   private readonly earlyReceipts = new Map<string, { status: number; at: number }>();
@@ -383,14 +387,16 @@ export class Dispatcher {
       ]);
       // A delivery receipt can beat our database write; apply any that arrived early.
       if (messageId) await this.applyEarlyReceipt(messageId);
-      const delay = this.scheduleNext(sessionId, campaign.id);
+      const delay = this.scheduleNext(sessionId, campaign.id, pacingOf(campaign));
       this.log(sessionId, campaign.id, 'sent', `Sent · next in ${Math.round(delay / 1000)}s`, item);
     } catch (err) {
       const reason = errorMessage(err);
+      // If the attachment pointer went stale, the next send uploads it again.
+      if (campaign.mediaPath) mediaCacheFor(sessionId).forgetFile(path.resolve(process.cwd(), campaign.mediaPath));
       if (!this.sessions.getConnectedSocket(sessionId)) {
         // The connection dropped mid-send: put it back and retry once we're online again.
         await prisma.queueItem.update({ where: { id: item.id }, data: { status: 'PENDING' } });
-        this.scheduleNext(sessionId, campaign.id);
+        this.scheduleNext(sessionId, campaign.id, pacingOf(campaign));
         this.log(sessionId, campaign.id, 'warn', `Connection lost while sending (${reason}). Will retry.`, item);
         return;
       }
@@ -406,7 +412,7 @@ export class Dispatcher {
         }),
         prisma.broadcastCampaign.updateMany({ where: { id: campaign.id, startedAt: null }, data: { startedAt: now } }),
       ]);
-      const delay = this.scheduleNext(sessionId, campaign.id);
+      const delay = this.scheduleNext(sessionId, campaign.id, pacingOf(campaign));
       this.log(sessionId, campaign.id, 'failed', `${reason} · next in ${Math.round(delay / 1000)}s`, item);
     }
 
@@ -430,7 +436,8 @@ export class Dispatcher {
     // Simulated human typing.
     await sock.presenceSubscribe(jid).catch(() => undefined);
     await sock.sendPresenceUpdate('composing', jid);
-    await sleep(randomBetween(PACING.typingMinMs, PACING.typingMaxMs));
+    const p = PACING_PROFILES[pacingOf(campaign)];
+    await sleep(randomBetween(p.typingMinMs, p.typingMaxMs));
     await sock.sendPresenceUpdate('paused', jid);
 
     let content: AnyMessageContent;
@@ -451,22 +458,34 @@ export class Dispatcher {
   }
 
   /** Decide the gap before the next message: random jitter, or a cooldown every N messages. */
-  private scheduleNext(sessionId: string, campaignId: string): number {
-    const count = (this.sentSinceCooldown.get(sessionId) ?? 0) + 1;
+  /**
+   * Decide the gap before the next message from the campaign's pacing preset:
+   * a gap inside a burst, a rest after a burst, or a longer break every N messages.
+   */
+  private scheduleNext(sessionId: string, campaignId: string, pacing: PacingMode): number {
+    const p = PACING_PROFILES[pacing];
+    const newBurst = (): number => (p.burstMax > 0 ? randomBetween(p.burstMin, p.burstMax) : 0);
+    const state = this.paceState.get(sessionId) ?? { sinceLongRest: 0, burstLeft: newBurst() };
+    state.sinceLongRest += 1;
+
     let delay: number;
-    if (count >= PACING.cooldownEvery) {
-      this.sentSinceCooldown.set(sessionId, 0);
-      delay = PACING.cooldownMs;
-      this.log(
-        sessionId,
-        campaignId,
-        'info',
-        `${PACING.cooldownEvery} messages dispatched — cooling down for ${PACING.cooldownMs / 1000}s.`,
-      );
+    if (state.sinceLongRest >= p.longRestEvery) {
+      state.sinceLongRest = 0;
+      state.burstLeft = newBurst();
+      delay = p.longRestMs;
+      this.log(sessionId, campaignId, 'info', `${p.longRestEvery} messages sent — taking a ${p.longRestMs / 1000}s break.`);
+    } else if (p.burstMax > 0) {
+      state.burstLeft -= 1;
+      if (state.burstLeft <= 0) {
+        state.burstLeft = newBurst();
+        delay = randomBetween(p.restMinMs, p.restMaxMs);
+      } else {
+        delay = randomBetween(p.gapMinMs, p.gapMaxMs);
+      }
     } else {
-      this.sentSinceCooldown.set(sessionId, count);
-      delay = randomBetween(PACING.jitterMinMs, PACING.jitterMaxMs);
+      delay = randomBetween(p.gapMinMs, p.gapMaxMs);
     }
+    this.paceState.set(sessionId, state);
     this.nextAllowedAt.set(sessionId, Date.now() + delay);
     return delay;
   }

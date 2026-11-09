@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, LogOut, RefreshCw, Send, Terminal, Users, Wifi, WifiOff } from 'lucide-react';
 import { BroadcastComposer } from './BroadcastComposer';
+import { describeDaysAway, upcomingOccasions, type UpcomingOccasion } from '@/lib/occasions';
 import { ThemeToggle } from './ThemeToggle';
 import { ContactsManager } from './ContactsManager';
 import { LiveTerminal } from './LiveTerminal';
@@ -38,6 +39,13 @@ const STATUS_LABEL: Record<SessionSnapshot['status'], string> = {
 
 export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onReconnect }: DashboardProps) {
   const [tab, setTab] = useState<Tab>('contacts');
+  const [occasionRequest, setOccasionRequest] = useState<{ id: string; nonce: number } | null>(null);
+  // Nearest festival within the next two months, suggested at the top of the dashboard.
+  // Computed in the browser only: it depends on today's date and the viewer's locale.
+  const [nextUp, setNextUp] = useState<UpcomingOccasion | null>(null);
+  useEffect(() => {
+    setNextUp(upcomingOccasions(new Date(), 1).find((u) => u.daysAway <= 60) ?? null);
+  }, []);
   const [contacts, setContacts] = useState<ContactDTO[]>([]);
   const [groups, setGroups] = useState<GroupDTO[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignDTO[]>([]);
@@ -158,7 +166,7 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
       <header className="card flex flex-wrap items-center justify-between gap-4 px-5 py-4">
         <div className="flex items-center gap-3">
           <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-diya-400 to-rose-500 text-2xl">
-            🪔
+            🎉
           </span>
           <div>
             <h1 className="text-lg font-bold text-stone-900">Festival Broadcaster</h1>
@@ -198,6 +206,29 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
           </span>
           <button type="button" className="btn-secondary" onClick={onReconnect}>
             <RefreshCw className="h-4 w-4" /> Reconnect now
+          </button>
+        </div>
+      )}
+
+      {nextUp && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-diya-200 bg-diya-50/70 px-5 py-3 text-sm">
+          <span className="text-stone-700">
+            <span className="mr-1.5 text-lg" aria-hidden="true">
+              {nextUp.occasion.emoji}
+            </span>
+            <strong className="text-stone-900">{nextUp.occasion.name}</strong> is {describeDaysAway(nextUp.daysAway)} (
+            {nextUp.approximate ? 'around ' : ''}
+            {nextUp.date.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}).
+          </span>
+          <button
+            type="button"
+            className="btn-primary py-1.5"
+            onClick={() => {
+              setOccasionRequest({ id: nextUp.occasion.id, nonce: Date.now() });
+              setTab('compose');
+            }}
+          >
+            Start a {nextUp.occasion.name} broadcast
           </button>
         </div>
       )}
@@ -244,6 +275,7 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
             connected={connected}
             onCreated={handleCampaignCreated}
             onGoToContacts={() => setTab('contacts')}
+            occasionRequest={occasionRequest}
           />
         )}
         {tab === 'live' && (

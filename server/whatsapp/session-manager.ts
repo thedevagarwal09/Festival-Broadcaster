@@ -19,6 +19,7 @@ import { emitToSession, sessionWatcherCount } from '../realtime';
 import { errorMessage } from '../utils/errors';
 import { sleep } from '../utils/sleep';
 import { mergePreviousSessions } from './account-merge';
+import { mediaCacheFor } from './media-cache';
 import { jidToPhone, normalizePnJid, toSessionUser } from '../utils/jid';
 import {
   isValidSessionId,
@@ -264,6 +265,8 @@ export class SessionManager {
         syncFullHistory: false,
         shouldSyncHistoryMessage: () => false,
         generateHighQualityLinkPreview: false,
+        // Upload each attachment once and reuse the pointer for every recipient (see media-cache.ts).
+        mediaCache: mediaCacheFor(s.id),
       });
       s.sock = sock;
 

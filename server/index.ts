@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   scheduler.start();
 
   httpServer.listen(port, host, () => {
-    console.log(`\n🪔  Festival Broadcaster ready on http://localhost:${port}  (${dev ? 'dev' : 'production'})\n`);
+    console.log(`\n🎉  Festival Broadcaster ready on http://localhost:${port}  (${dev ? 'dev' : 'production'})\n`);
   });
 
   let shuttingDown = false;

@@ -1,4 +1,5 @@
 import type { BroadcastCampaign, QueueItem } from '@prisma/client';
+import { isPacingMode } from '../src/lib/pacing';
 import type {
   CampaignDTO,
   CampaignLogEntry,
@@ -30,6 +31,8 @@ export function toCampaignDTO(c: CampaignWithGroup): CampaignDTO {
     mediaDuration: c.mediaDuration,
     status: (c.status === 'RUNNING' ? 'PROCESSING' : c.status) as CampaignStatus,
     scheduledAt: c.scheduledAt ? c.scheduledAt.toISOString() : null,
+    pacing: isPacingMode(c.pacing) ? c.pacing : 'careful',
+    occasion: c.occasion,
     totalRecipients: c.totalRecipients,
     sentCount: c.sentCount,
     failedCount: c.failedCount,

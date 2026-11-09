@@ -30,7 +30,7 @@ export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh }: QrL
         <section className="palette-light flex flex-col justify-between bg-gradient-to-br from-diya-500 via-diya-600 to-rose-600 p-8 text-white">
           <div>
             <div className="mb-6 flex items-center gap-2 text-diya-100">
-              <span className="text-2xl">🪔</span>
+              <span className="text-2xl">🎉</span>
               <span className="text-sm font-semibold uppercase tracking-widest">Festival Broadcaster</span>
             </div>
             <h1 className="text-3xl font-bold leading-tight">Send warm festival wishes to everyone you love.</h1>

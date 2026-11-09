@@ -10,7 +10,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import type { Dispatcher } from '../queue/dispatcher';
 import { queueItemToLog, toCampaignDTO } from '../serializers';
-import { removeUpload, upload } from '../upload';
+import { removeUpload, upload, UPLOAD_DIR } from '../upload';
 import {
   detectMediaKind,
   IMAGE_MAX_INPUT_BYTES,
@@ -35,7 +35,9 @@ import {
 } from '../services/quietHours';
 import { HttpError, errorMessage } from '../utils/errors';
 import type { SessionManager } from '../whatsapp/session-manager';
-import { estimateDurationMs } from '../../src/lib/pacing';
+import { estimateDurationMs, isPacingMode } from '../../src/lib/pacing';
+import { getOccasion, isOccasionId } from '../../src/lib/occasions';
+import { createECard } from '../services/ecard';
 import { validateTemplate } from '../../src/lib/spintax';
 import {
   isValidSessionId,
@@ -337,6 +339,8 @@ export function createApiRouter(deps: {
       const groupId = readString(body.groupId);
       const messageTemplate = typeof body.messageTemplate === 'string' ? body.messageTemplate.trim() : '';
       const requestedName = readString(body.name);
+      const pacing = isPacingMode(body.pacing) ? body.pacing : 'careful';
+      const occasion = isOccasionId(body.occasion) ? body.occasion : null;
 
       const media = body.mediaFile ? await readMediaInfo(body.mediaFile) : null;
       if (body.mediaFile && !media) {
@@ -389,6 +393,8 @@ export function createApiRouter(deps: {
             mediaDuration: media?.durationSec ?? null,
             status,
             scheduledAt,
+            pacing,
+            occasion,
             totalRecipients: recipients.length,
           },
           include: { group: { select: { name: true } } },
@@ -400,7 +406,7 @@ export function createApiRouter(deps: {
             recipientJid: contact.jid,
             recipientName: contact.name ?? contact.pushName ?? null,
             status: 'PENDING',
-            scheduledAt: new Date(startMs + estimateDurationMs(position)),
+            scheduledAt: new Date(startMs + estimateDurationMs(position, pacing)),
           })),
         });
         // The draft has become a campaign.
@@ -479,6 +485,21 @@ export function createApiRouter(deps: {
     }),
   );
 
+  // --- Festival e-cards ---------------------------------------------------------
+
+  /** Generate a festival e-card and return it as a ready attachment. */
+  router.post(
+    '/sessions/:sessionId/ecards',
+    ah(async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const occasion = getOccasion(readString(body.occasion));
+      if (!occasion) throw new HttpError(400, 'Pick an occasion for the card.');
+      const title = readString(body.title).slice(0, 40) || occasion.card.title.en;
+      const subtitle = readString(body.subtitle).slice(0, 80);
+      res.status(201).json(await createECard({ occasion, title, subtitle }, UPLOAD_DIR));
+    }),
+  );
+
   // --- Draft auto-save ---------------------------------------------------------
 
   router.get(
@@ -492,6 +513,9 @@ export function createApiRouter(deps: {
         messageTemplate: draft?.messageTemplate ?? '',
         media,
         scheduledAt: draft?.scheduledAt ? draft.scheduledAt.toISOString() : null,
+        occasion: draft?.occasion ?? null,
+        language: draft?.language ?? 'en',
+        pacing: draft?.pacing ?? 'careful',
         updatedAt: draft ? draft.updatedAt.toISOString() : null,
       };
       res.json(payload);
@@ -512,6 +536,9 @@ export function createApiRouter(deps: {
         messageTemplate: template,
         media: media ? JSON.stringify({ file: media.file }) : null,
         scheduledAt: scheduled && !Number.isNaN(scheduled.getTime()) ? scheduled : null,
+        occasion: isOccasionId(body.occasion) ? body.occasion : null,
+        language: body.language === 'hi' || body.language === 'hinglish' ? body.language : 'en',
+        pacing: isPacingMode(body.pacing) ? body.pacing : 'careful',
       };
       await prisma.userSession.upsert({ where: { id: sessionId }, create: { id: sessionId }, update: {} });
       const saved = await prisma.draft.upsert({ where: { sessionId }, create: { sessionId, ...data }, update: data });

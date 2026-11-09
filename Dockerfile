@@ -40,8 +40,9 @@ FROM ${NODE_IMAGE} AS runner
 WORKDIR /app
 
 # tini: forwards stop signals so campaigns and WhatsApp sockets shut down cleanly.
+# fonts: Latin + Devanagari text for festival e-cards (the slim image has no fonts at all).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssl ca-certificates tini \
+ && apt-get install -y --no-install-recommends openssl ca-certificates tini fontconfig fonts-dejavu-core fonts-lohit-deva \
  && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production \
