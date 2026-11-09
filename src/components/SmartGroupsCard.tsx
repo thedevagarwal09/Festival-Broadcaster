@@ -160,13 +160,23 @@ export function SmartGroupsCard({ sessionId, onApplied }: SmartGroupsCardProps) 
         </p>
       ) : (
         preview && (
-          <p className="mt-3 text-[11px] text-stone-500">
-            Based on {preview.coverage.chatsMatched.toLocaleString()} chats with saved contacts
-            {preview.coverage.historyImportedAt
-              ? ` (history imported ${formatRelative(preview.coverage.historyImportedAt)}, plus new messages)`
-              : ' (new messages since linking)'}
-            .
-          </p>
+          <div className="mt-3 space-y-1.5 text-[11px] text-stone-500">
+            <p>
+              {preview.coverage.historyImportedAt
+                ? `Chat history imported ${formatRelative(preview.coverage.historyImportedAt)}, plus new messages since.`
+                : 'No chat history imported — only messages since linking are counted.'}{' '}
+              {preview.coverage.chatsKnown.toLocaleString()} chats found,{' '}
+              <strong className="text-stone-700">{preview.coverage.chatsMatched.toLocaleString()} matched</strong> to saved
+              contacts.
+            </p>
+            {preview.coverage.unmatchedPrivacyIdChats > 0 && (
+              <p className="rounded-lg bg-sky-50 px-2.5 py-1.5 text-sky-800">
+                {preview.coverage.unmatchedPrivacyIdChats.toLocaleString()} chats use WhatsApp privacy IDs and aren’t linked
+                to a contact yet. Matching runs automatically while WhatsApp is connected, and again when you click the
+                button below (it can take up to a minute).
+              </p>
+            )}
+          </div>
         )
       )}
 

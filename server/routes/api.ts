@@ -12,6 +12,7 @@ import type { Dispatcher } from '../queue/dispatcher';
 import { queueItemToLog, toCampaignDTO } from '../serializers';
 import { removeUpload, upload } from '../upload';
 import { analyzeContacts, applySmartGroups, readSmartSettings } from '../services/contactCategorizer';
+import { resolveLids } from '../services/lidResolver';
 import { detectMediaKind, IMAGE_MAX_INPUT_BYTES } from '../services/mediaCompressor';
 import {
   deleteMediaFile,
@@ -203,7 +204,11 @@ export function createApiRouter(deps: {
   router.post(
     '/sessions/:sessionId/smart-groups',
     ah(async (req, res) => {
-      res.json(await applySmartGroups(req.params.sessionId, readSmartSettings(req.body)));
+      const { sessionId } = req.params;
+      // Link any privacy-id chats to contacts first (bounded so the request stays short).
+      const sock = sessions.getConnectedSocket(sessionId);
+      if (sock) await resolveLids(sessionId, sock, 40_000).catch(() => undefined);
+      res.json(await applySmartGroups(sessionId, readSmartSettings(req.body)));
     }),
   );
 

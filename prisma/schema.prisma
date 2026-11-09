@@ -55,6 +55,8 @@ model Contact {
   phone     String
   /// WhatsApp privacy id (…@lid); some chats are addressed by this instead of the phone number
   lid       String?
+  /// When the privacy id was looked up (set even if none was found, so it isn't asked again)
+  lidCheckedAt DateTime?
   /// Smart category from the last categorisation: frequent | chatted | cold
   chatCategory String?
   /// Most recent message either way, from chat activity (no message content is stored)

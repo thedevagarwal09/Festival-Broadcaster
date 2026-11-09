@@ -108,6 +108,7 @@ function aggregate(
   ownJid: string | null,
   seen: Set<string>,
   broadcasts: { ids: Set<string>; times: Map<string, number[]> } | null,
+  lidToPn: Map<string, string> = new Map(),
 ): Map<string, Delta> {
   const deltas = new Map<string, Delta>();
   const get = (jid: string): Delta => {
@@ -119,7 +120,8 @@ function aggregate(
     return d;
   };
   for (const msg of messages) {
-    const jid = chatJid(msg.key.remoteJid);
+    const raw = chatJid(msg.key.remoteJid);
+    const jid = raw ? (lidToPn.get(raw) ?? raw) : null;
     if (!jid || jid === ownJid || !isConversational(msg)) continue;
     const id = msg.key.id ?? '';
     if (id) {
@@ -187,13 +189,47 @@ function enqueue(sessionId: string, work: () => Promise<void>): void {
   );
 }
 
+/**
+ * Phone ↔ privacy-id pairs from the chat list. WhatsApp keys many chats by privacy id (…@lid) and
+ * puts the phone number in `pnJid` (or the privacy id in `lidJid` for phone-keyed chats).
+ */
+function chatIdentityPairs(chats: Chat[]): Map<string, string> {
+  const lidToPn = new Map<string, string>();
+  for (const chat of chats) {
+    const rec = chat as unknown as Record<string, unknown>;
+    const id = chatJid(chat.id);
+    const pn = chatJid(typeof rec.pnJid === 'string' ? rec.pnJid : null);
+    const lid = chatJid(typeof rec.lidJid === 'string' ? rec.lidJid : null);
+    if (id?.endsWith('@lid') && pn?.endsWith('@s.whatsapp.net')) lidToPn.set(id, pn);
+    if (id?.endsWith('@s.whatsapp.net') && lid?.endsWith('@lid')) lidToPn.set(lid, id);
+  }
+  return lidToPn;
+}
+
+/** Save the pairs on contacts so later live messages (often privacy-id addressed) match too. */
+async function rememberPairs(sessionId: string, lidToPn: Map<string, string>): Promise<void> {
+  const pairs = [...lidToPn.entries()];
+  for (let i = 0; i < pairs.length; i += CHUNK) {
+    await prisma.$transaction(
+      pairs
+        .slice(i, i + CHUNK)
+        .map(([lid, pn]) =>
+          prisma.contact.updateMany({ where: { sessionId, jid: pn }, data: { lid, lidCheckedAt: new Date() } }),
+        ),
+    );
+  }
+}
+
 /** One chunk of the post-link history sync: chat list + recent messages. */
 export function recordHistory(sessionId: string, chats: Chat[], messages: WAMessage[], ownJid: string | null): void {
   enqueue(sessionId, async () => {
     const broadcasts = await loadBroadcastFingerprints(sessionId);
-    const deltas = aggregate(messages, ownJid, seenSet(sessionId), broadcasts);
+    const lidToPn = chatIdentityPairs(chats);
+    await rememberPairs(sessionId, lidToPn);
+    const deltas = aggregate(messages, ownJid, seenSet(sessionId), broadcasts, lidToPn);
     for (const chat of chats) {
-      const jid = chatJid(chat.id);
+      const rawId = chatJid(chat.id);
+      const jid = rawId ? (lidToPn.get(rawId) ?? rawId) : null;
       if (!jid || jid === ownJid) continue;
       const d = deltas.get(jid) ?? { in: 0, out: 0, lastIn: null, lastOut: null, hasThread: false, threadAt: null };
       d.hasThread = true;
@@ -203,7 +239,9 @@ export function recordHistory(sessionId: string, chats: Chat[], messages: WAMess
     if (deltas.size === 0) return;
     const chatsTouched = await apply(sessionId, deltas);
     await prisma.userSession.update({ where: { id: sessionId }, data: { historyImportedAt: new Date() } });
-    console.log(`[activity:${sessionId}] history: ${chats.length} chats, ${messages.length} messages → ${chatsTouched} contacts updated`);
+    console.log(
+      `[activity:${sessionId}] history: ${chats.length} chats, ${messages.length} messages → ${chatsTouched} chats updated (${lidToPn.size} privacy ids mapped to phone numbers)`,
+    );
   });
 }
 

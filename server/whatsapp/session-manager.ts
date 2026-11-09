@@ -22,6 +22,7 @@ import { errorMessage } from '../utils/errors';
 import { sleep } from '../utils/sleep';
 import { mergePreviousSessions } from './account-merge';
 import { recordHistory, recordLive } from '../services/chatActivity';
+import { resolveLids } from '../services/lidResolver';
 import { jidToPhone, normalizePnJid, toSessionUser } from '../utils/jid';
 import {
   isValidSessionId,
@@ -46,6 +47,8 @@ const ADDRESS_BOOK_SYNC_DELAY_MS = 2_000;
  * notification and Baileys pulls just that change. This periodic pull is only a backstop.
  */
 const ADDRESS_BOOK_MAX_AGE_MS = 6 * 60 * 60_000;
+/** When to match privacy-id chats to contacts after connecting (history can take minutes). */
+const LID_RESOLVE_DELAYS_MS = [60_000, 5 * 60_000];
 
 interface ManagedSession {
   id: string;
@@ -391,6 +394,15 @@ export class SessionManager {
       this.planAddressBookSync(s, sock).catch((err: unknown) =>
         console.warn(`[session:${s.id}] could not plan address book sync:`, errorMessage(err)),
       );
+      // Link privacy-id chats to contacts once the address book and any chat history have arrived.
+      for (const delay of LID_RESOLVE_DELAYS_MS) {
+        setTimeout(() => {
+          if (s.sock !== sock || s.status !== 'connected') return;
+          resolveLids(s.id, sock, 5 * 60_000).catch((err: unknown) =>
+            console.warn(`[session:${s.id}] privacy-id matching failed:`, errorMessage(err)),
+          );
+        }, delay).unref();
+      }
       return;
     }
 

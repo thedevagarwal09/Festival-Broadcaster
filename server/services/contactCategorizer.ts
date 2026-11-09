@@ -84,9 +84,14 @@ export async function analyzeContacts(
   );
 
   let matchedChats = 0;
+  let unmatchedLidChats = 0;
   for (const a of activity) {
     const contact = byJid.get(a.jid) ?? byLid.get(a.jid);
-    if (!contact) continue; // chats with people who aren't in the contact list
+    if (!contact) {
+      // Either someone not in your contacts, or a privacy-id chat not linked to a contact yet.
+      if (a.jid.endsWith('@lid')) unmatchedLidChats += 1;
+      continue;
+    }
     matchedChats += 1;
     const e = engagement.get(contact.id)!;
     e.messagesIn += a.messagesIn;
@@ -135,6 +140,7 @@ export async function analyzeContacts(
       historyImportedAt: session?.historyImportedAt ? session.historyImportedAt.toISOString() : null,
       chatsKnown: activity.length,
       chatsMatched: matchedChats,
+      unmatchedPrivacyIdChats: unmatchedLidChats,
     },
     categorizedAt: session?.categorizedAt ? session.categorizedAt.toISOString() : null,
     sampleFrequent: topFrequent,

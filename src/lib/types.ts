@@ -65,6 +65,8 @@ export interface SmartGroupsAnalysis {
     /** Chats with activity data, and how many matched a saved contact. */
     chatsKnown: number;
     chatsMatched: number;
+    /** Chats addressed by privacy id that aren't linked to a contact yet (matched automatically while connected). */
+    unmatchedPrivacyIdChats: number;
   };
   categorizedAt: string | null;
   /** A few names from the frequent group, for a sanity check before applying. */
