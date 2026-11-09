@@ -37,6 +37,7 @@ import {
   type Occasion,
   type OccasionCategory,
   type TemplateLanguage,
+  nextOccurrence,
   type UpcomingOccasion,
 } from '@/lib/occasions';
 import { describeWindow, runTouchesQuietHours, toLocalInputValue } from '@/lib/quiet-hours';
@@ -110,11 +111,30 @@ export function BroadcastComposer({
   const [language, setLanguage] = useState<TemplateLanguage>('en');
   const [pacing, setPacing] = useState<PacingMode>('careful');
   const [card, setCard] = useState<{ title: string; subtitle: string } | null>(null);
+  /** Text that was replaced by the last occasion/language switch, offered back via "Undo". */
+  const [undoText, setUndoText] = useState<string | null>(null);
   const [cardBusy, setCardBusy] = useState(false);
   const occasion = getOccasion(occasionId) ?? FIRST_OCCASION;
   // Browser-only (today's date and the viewer's locale), so server and client HTML match.
   const [upcoming, setUpcoming] = useState<UpcomingOccasion[]>([]);
-  useEffect(() => setUpcoming(upcomingOccasions(new Date(), 4)), []);
+  const [nextDates, setNextDates] = useState<Record<string, { date: Date; approximate: boolean } | null>>({});
+  useEffect(() => {
+    const now = new Date();
+    setUpcoming(upcomingOccasions(now, 4));
+    setNextDates(Object.fromEntries(OCCASIONS.map((o) => [o.id, nextOccurrence(o, now)])));
+  }, []);
+
+  /** "25 Dec 2026", "≈ 29 Oct 2027", "Any date" (personal) — shown in front of each occasion. */
+  const dateLabel = (o: Occasion): string => {
+    if (!o.date) return 'Any date';
+    const next = nextDates[o.id];
+    if (next === undefined) return '…';
+    if (next === null) return 'Date to be confirmed';
+    const text = next.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    return next.approximate ? `≈ ${text}` : text;
+  };
+  const byDate = (a: Occasion, b: Occasion): number =>
+    (nextDates[a.id]?.date.getTime() ?? Number.MAX_SAFE_INTEGER) - (nextDates[b.id]?.date.getTime() ?? Number.MAX_SAFE_INTEGER);
   const [media, setMedia] = useState<MediaInfo | null>(null);
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [compress, setCompress] = useState(true);
@@ -418,19 +438,25 @@ export function BroadcastComposer({
   // ---- Occasion, templates and e-cards -------------------------------------------------
 
   /** Switch occasion/language; replace the text only if it's still an unedited built-in template. */
-  const chooseOccasion = (id: string, lang: TemplateLanguage = language, force = false) => {
+  /** Switch occasion and/or language and load that occasion's message (the old text can be restored). */
+  const chooseOccasion = (id: string, lang: TemplateLanguage = language) => {
     const next = getOccasion(id);
     if (!next) return;
     setOccasionId(id);
     setLanguage(lang);
     setCard(null);
-    if (force || isStockTemplate(template)) setTemplate(next.templates[lang]);
+    const nextText = next.templates[lang];
+    if (nextText === template) return;
+    // Keep offering the person's own text back across several switches (built-in templates
+    // don't need an undo); it's dropped once they start editing the new message.
+    if (!isStockTemplate(template)) setUndoText(template);
+    setTemplate(nextText);
   };
 
   // "Start a … broadcast" from the dashboard banner.
   useEffect(() => {
     if (!occasionRequest || draftStatus === 'loading') return;
-    chooseOccasion(occasionRequest.id, language, true);
+    chooseOccasion(occasionRequest.id, language);
     // Only react to new requests.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [occasionRequest?.nonce, draftStatus === 'loading']);
@@ -513,16 +539,18 @@ export function BroadcastComposer({
       <section className="card flex flex-col gap-5 p-6">
         <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
           <div className="flex flex-wrap items-end gap-3">
-            <label className="min-w-[200px] flex-1">
+            <label className="min-w-[240px] flex-1">
               <span className="mb-1.5 block text-sm font-medium text-stone-700">Occasion</span>
               <select id="occasion" className="input" value={occasionId} onChange={(e) => chooseOccasion(e.target.value)}>
                 {(Object.keys(CATEGORY_LABELS) as OccasionCategory[]).map((cat) => (
                   <optgroup key={cat} label={CATEGORY_LABELS[cat]}>
-                    {OCCASIONS.filter((o) => o.category === cat).map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.emoji} {o.name}
-                      </option>
-                    ))}
+                    {OCCASIONS.filter((o) => o.category === cat)
+                      .sort(byDate)
+                      .map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {dateLabel(o)} — {o.emoji} {o.name}
+                        </option>
+                      ))}
                   </optgroup>
                 ))}
               </select>
@@ -545,7 +573,7 @@ export function BroadcastComposer({
             <button
               type="button"
               className="btn-secondary"
-              onClick={() => chooseOccasion(occasionId, language, true)}
+              onClick={() => chooseOccasion(occasionId, language)}
               title="Replace the message with this occasion's template"
             >
               <Sparkles className="h-4 w-4" /> Use template
@@ -561,7 +589,7 @@ export function BroadcastComposer({
                   className={`chip ring-1 transition ${
                     u.occasion.id === occasionId ? 'bg-diya-100 text-diya-800 ring-diya-300' : 'bg-surface text-stone-700 ring-stone-200 hover:bg-stone-100'
                   }`}
-                  onClick={() => chooseOccasion(u.occasion.id, language, true)}
+                  onClick={() => chooseOccasion(u.occasion.id, language)}
                   title={u.approximate ? 'Date varies by region and year — please double-check' : undefined}
                 >
                   {u.occasion.emoji} {u.occasion.name} · {describeDaysAway(u.daysAway)}
@@ -571,9 +599,19 @@ export function BroadcastComposer({
               ))}
             </div>
           )}
-          {!isStockTemplate(template) && (
-            <p className="mt-2 text-[11px] text-stone-500">
-              Your edited message stays as it is when you switch occasion — click “Use template” to replace it.
+          {undoText !== null && (
+            <p className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-sky-50 px-3 py-1.5 text-xs text-sky-800">
+              Message switched to the {occasion.name} template ({LANGUAGE_LABELS[language]}).
+              <button
+                type="button"
+                className="font-semibold underline underline-offset-2"
+                onClick={() => {
+                  setTemplate(undoText);
+                  setUndoText(null);
+                }}
+              >
+                Undo — bring back my previous message
+              </button>
             </p>
           )}
         </div>
@@ -655,7 +693,10 @@ export function BroadcastComposer({
               className="block min-h-[240px] w-full resize-y border-0 bg-surface px-4 py-3 font-mono text-sm leading-relaxed outline-none"
               value={template}
               maxLength={MAX_TEMPLATE}
-              onChange={(e) => setTemplate(e.target.value)}
+              onChange={(e) => {
+                setTemplate(e.target.value);
+                setUndoText(null); // once they start editing the new text, the undo no longer applies
+              }}
               spellCheck
             />
           </div>
