@@ -230,7 +230,7 @@ export function renderECardSvg({ occasion, title, subtitle }: ECardInput): strin
 }
 
 /** Render the card to a JPEG in the uploads folder and return it as an attachment. */
-export async function createECard(input: ECardInput, outputDir: string): Promise<MediaInfo> {
+export async function createECard(input: ECardInput, outputDir: string, owner: string): Promise<MediaInfo> {
   const svg = renderECardSvg(input);
   const data = await sharp(Buffer.from(svg)).jpeg({ quality: 88, mozjpeg: true }).toBuffer();
   const file = `${Date.now()}-${randomUUID()}.jpg`;
@@ -248,6 +248,7 @@ export async function createECard(input: ECardInput, outputDir: string): Promise
     compressed: true,
     note: `${input.occasion.name} e-card — the same card goes to everyone; the caption is personalised.`,
   };
-  await fs.writeFile(path.join(outputDir, `${file}.json`), JSON.stringify(info));
+  // owner: lets Erase my data find this file. It is never sent to the browser.
+  await fs.writeFile(path.join(outputDir, `${file}.json`), JSON.stringify({ ...info, owner }));
   return info;
 }

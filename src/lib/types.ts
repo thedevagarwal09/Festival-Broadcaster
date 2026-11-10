@@ -179,8 +179,8 @@ export interface ServerToClientEvents {
   campaign_progress: (payload: CampaignDTO) => void;
   campaign_log: (payload: CampaignLogEntry) => void;
   media_job: (payload: MediaJob) => void;
-  /** Everything on the server was erased; every open tab starts over. */
-  server_erased: (payload: EraseResult) => void;
+  /** This person's data was erased; their open tabs start over. */
+  data_erased: (payload: EraseResult) => void;
 }
 
 export interface EraseResult {

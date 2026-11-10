@@ -10,11 +10,6 @@ const DEFAULTS: StoredQuietHours = { enabled: true, start: '23:00', end: '07:00'
 
 let cache: StoredQuietHours | null = null;
 
-/** Back to the defaults on the next read (used by Erase all). */
-export function resetQuietHoursCache(): void {
-  cache = null;
-}
-
 /** The server's time zone (Docker: the TZ variable). All quiet-hour times are in this zone. */
 export function serverTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';

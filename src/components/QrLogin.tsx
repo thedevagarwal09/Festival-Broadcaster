@@ -12,7 +12,7 @@ interface QrLoginProps {
   socketConnected: boolean;
   error: string | null;
   onRefresh: () => void;
-  /** Opens the "Unlink & erase all data" confirmation. */
+  /** Opens the "Unlink & erase my data" confirmation. */
   onEraseAll: () => void;
 }
 
@@ -30,7 +30,7 @@ const PRIVACY_POINTS = [
   {
     icon: Trash2,
     title: 'You stay in control',
-    text: 'Unlink any time from your phone, or erase everything from this server in one click.',
+    text: 'Unlink any time from your phone, or erase all your data from this server in one click.',
   },
 ] as const;
 
@@ -142,9 +142,9 @@ export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh, onEra
             type="button"
             className="btn-ghost text-xs text-stone-500 hover:text-rose-600"
             onClick={onEraseAll}
-            title="Delete all contacts, groups, campaigns, uploads and WhatsApp logins stored on this server"
+            title="Delete your contacts, groups, campaigns, uploads and WhatsApp login from this server"
           >
-            <Trash2 className="h-3.5 w-3.5" /> Erase all data on this server
+            <Trash2 className="h-3.5 w-3.5" /> Erase my data from this server
           </button>
         </section>
       </div>

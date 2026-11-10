@@ -38,7 +38,7 @@ import type { SessionManager } from '../whatsapp/session-manager';
 import { estimateDurationMs, isPacingMode } from '../../src/lib/pacing';
 import { getOccasion, isOccasionId } from '../../src/lib/occasions';
 import { createECard } from '../services/ecard';
-import { eraseEverything } from '../services/eraseAll';
+import { eraseMyData, MAX_ERASE_SESSIONS } from '../services/eraseMyData';
 import { validateTemplate } from '../../src/lib/spintax';
 import {
   isValidSessionId,
@@ -142,15 +142,19 @@ export function createApiRouter(deps: {
     }),
   );
 
-  // Unlink every WhatsApp account and delete ALL data on this server. The body must say ERASE so
-  // a stray or replayed request can't trigger it.
+  // Unlink and delete everything belonging to the person asking: the session ids this browser has
+  // used (each id is an unguessable UUID, the same key that opens the dashboard) plus every
+  // session of the WhatsApp numbers linked to them. Other people's data is never touched.
+  // The body must say ERASE so a stray or replayed request can't trigger it.
   router.post(
-    '/erase-all',
+    '/erase-my-data',
     ah(async (req, res) => {
-      if ((req.body as { confirm?: unknown } | undefined)?.confirm !== 'ERASE') {
-        throw new HttpError(400, 'Type ERASE to confirm.');
-      }
-      res.json(await eraseEverything(sessions, dispatcher));
+      const body = (req.body ?? {}) as { confirm?: unknown; sessionIds?: unknown };
+      if (body.confirm !== 'ERASE') throw new HttpError(400, 'Type ERASE to confirm.');
+      const ids = Array.isArray(body.sessionIds) ? [...new Set(body.sessionIds.filter(isValidSessionId))] : [];
+      if (ids.length === 0) throw new HttpError(400, 'No session to erase.');
+      if (ids.length > MAX_ERASE_SESSIONS) throw new HttpError(400, 'Too many sessions in one request.');
+      res.json(await eraseMyData(ids, sessions, dispatcher));
     }),
   );
 
@@ -509,7 +513,7 @@ export function createApiRouter(deps: {
       if (!occasion) throw new HttpError(400, 'Pick an occasion for the card.');
       const title = readString(body.title).slice(0, 40) || occasion.card.title.en;
       const subtitle = readString(body.subtitle).slice(0, 80);
-      res.status(201).json(await createECard({ occasion, title, subtitle }, UPLOAD_DIR));
+      res.status(201).json(await createECard({ occasion, title, subtitle }, UPLOAD_DIR, req.params.sessionId));
     }),
   );
 

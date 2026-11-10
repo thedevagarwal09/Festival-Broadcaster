@@ -18,7 +18,7 @@ interface DashboardProps {
   snapshot: SessionSnapshot;
   socketConnected: boolean;
   onLogout: () => Promise<void>;
-  /** Opens the "Unlink & erase all data" confirmation. */
+  /** Opens the "Unlink & erase my data" confirmation. */
   onEraseAll: () => void;
   onReconnect: () => void;
 }
@@ -201,10 +201,10 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
             className="btn-secondary text-rose-600 hover:bg-rose-50"
             onClick={onEraseAll}
             disabled={loggingOut}
-            title="Unlink WhatsApp and delete all contacts, groups, campaigns and uploads from this server"
+            title="Unlink WhatsApp and delete your contacts, groups, campaigns and uploads from this server"
           >
             <Trash2 className="h-4 w-4" />
-            Erase all data
+            Erase my data
           </button>
         </div>
       </header>

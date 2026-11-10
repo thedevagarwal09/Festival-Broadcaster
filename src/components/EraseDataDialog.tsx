@@ -3,18 +3,21 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Trash2, X } from 'lucide-react';
 import { api } from '@/lib/api';
+import { browserSessionIds } from '@/lib/session-id';
 import type { EraseResult } from '@/lib/types';
 
 const CONFIRM_WORD = 'ERASE';
 
 interface EraseDataDialogProps {
   open: boolean;
+  /** The session this tab is on; earlier ones from this browser are added automatically. */
+  sessionId: string;
   onClose: () => void;
   onErased: (result: EraseResult) => void;
 }
 
-/** Confirmation for "Unlink & erase all data". The person must type ERASE. */
-export function EraseDataDialog({ open, onClose, onErased }: EraseDataDialogProps) {
+/** Confirmation for "Unlink & erase my data". The person must type ERASE. */
+export function EraseDataDialog({ open, sessionId, onClose, onErased }: EraseDataDialogProps) {
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +47,7 @@ export function EraseDataDialog({ open, onClose, onErased }: EraseDataDialogProp
     setBusy(true);
     setError(null);
     try {
-      onErased(await api.eraseAll());
+      onErased(await api.eraseMyData(browserSessionIds(sessionId)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erase failed');
       setBusy(false);
@@ -65,7 +68,7 @@ export function EraseDataDialog({ open, onClose, onErased }: EraseDataDialogProp
               <Trash2 className="h-5 w-5" />
             </span>
             <h2 id="erase-title" className="text-lg font-bold text-stone-900">
-              Unlink &amp; erase all data?
+              Unlink &amp; erase my data?
             </h2>
           </div>
           <button type="button" className="btn-ghost -mr-2 px-2" onClick={onClose} disabled={busy} aria-label="Close">
@@ -73,15 +76,16 @@ export function EraseDataDialog({ open, onClose, onErased }: EraseDataDialogProp
           </button>
         </div>
 
-        <p className="text-sm text-stone-600">This permanently removes everything stored on this server:</p>
+        <p className="text-sm text-stone-600">This permanently removes everything of yours from this server:</p>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-stone-600">
-          <li>unlinks every WhatsApp account and deletes its login keys</li>
-          <li>all saved contacts and groups</li>
-          <li>all campaigns, scheduled sends and their logs (running ones stop)</li>
-          <li>drafts, settings such as quiet hours, and every uploaded image, video and e-card</li>
+          <li>unlinks your WhatsApp and deletes its login keys</li>
+          <li>your saved contacts and groups</li>
+          <li>your campaigns, scheduled sends and their logs (running ones stop)</li>
+          <li>your draft, and the images, videos and e-cards you added</li>
         </ul>
         <p className="mt-3 text-sm text-stone-600">
-          It cannot be undone. Your chats and contacts on your phone are not touched.
+          It cannot be undone. Other people using this server aren&apos;t affected, and the chats and contacts on
+          your phone are not touched.
         </p>
 
         <label className="mt-4 block text-sm font-medium text-stone-700" htmlFor="erase-confirm">

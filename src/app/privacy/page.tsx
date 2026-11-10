@@ -61,7 +61,7 @@ export default function PrivacyPage() {
               <strong>Images, videos and e-cards</strong> you upload or create to attach to a greeting.
             </li>
             <li>
-              <strong>Settings</strong> such as quiet hours.
+              <strong>Server settings</strong> such as quiet hours, which aren&apos;t personal data.
             </li>
           </ul>
         </Section>
@@ -94,7 +94,7 @@ export default function PrivacyPage() {
           <p>
             Data stays until you remove it. <strong>Unlink</strong> deletes the WhatsApp login keys straight away
             but keeps your contacts and groups, so linking again picks up where you left off.{' '}
-            <strong>Erase all data</strong> deletes everything, as described below.
+            <strong>Erase my data</strong> deletes everything of yours, as described below.
           </p>
         </Section>
 
@@ -104,9 +104,10 @@ export default function PrivacyPage() {
               <strong>Unlink</strong> from the dashboard, or on your phone: WhatsApp → Settings → Linked devices.
             </li>
             <li>
-              <strong>Erase all data</strong> (dashboard header, or below the QR code) permanently deletes every
-              login, contact, group, campaign, draft, setting and upload from this server, and rewrites the
-              database so deleted entries can&apos;t be recovered.
+              <strong>Erase my data</strong> (dashboard header, or below the QR code) permanently deletes your
+              WhatsApp login, contacts, groups, campaigns, draft and uploads from this server, and rewrites the
+              database so deleted entries can&apos;t be recovered. Nobody else&apos;s data is affected, and nobody
+              else can erase yours.
             </li>
             <li>Delete a group, an uploaded attachment or your draft at any time.</li>
           </ul>
@@ -114,9 +115,10 @@ export default function PrivacyPage() {
 
         <Section title="Keeping it secure">
           <p>
-            This app is self-hosted: it runs on a server controlled by whoever set it up, not on a shared cloud
-            service. Anyone who can open this page can use the linked WhatsApp account, so keep its address private
-            or behind a password, VPN or firewall, and unlink or erase when you&apos;re done.
+            Your data is kept separate from everyone else&apos;s on this server. Your dashboard is tied to this
+            browser by a private random key stored in it, so anyone who uses this browser can open your dashboard
+            and send from your linked WhatsApp. On a shared or public computer, unlink or erase your data when
+            you&apos;re done.
           </p>
         </Section>
 

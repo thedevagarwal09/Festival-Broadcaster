@@ -259,20 +259,25 @@ The dashboard shows Total targets, Dispatched and Failed. Time left uses the cam
 messages (jitter and cooldowns included), falling back to the pacing settings until two messages
 have gone out.
 
-## Unlink and erase all data
+## Unlink and erase my data
 
-**Erase all data** (in the dashboard header, and under the QR code when nothing is linked)
-leaves the server as if it had just been installed. You must type `ERASE` to confirm. It then:
+**Erase my data** (in the dashboard header, and under the QR code) deletes everything belonging to
+the person using it, and nothing else, so it is safe on a server shared by many people. You must
+type `ERASE` to confirm. "Their data" means the session ids this browser has used (it remembers
+earlier ones, since a new id is issued after every unlink), plus every session of the WhatsApp
+number linked to them. It then:
 
-1. stops sending (the message in flight finishes first)
-2. unlinks every WhatsApp account and deletes its login keys
-3. deletes all contacts, groups, campaigns, logs, drafts and settings, then compacts the database
-   so the deleted rows don't linger in the file
-4. deletes every uploaded, compressed and e-card file
+1. stops their sending (the message in flight finishes first)
+2. unlinks their WhatsApp and deletes its login keys
+3. deletes their contacts, groups, campaigns, logs and draft, then compacts the database so the
+   deleted rows don't linger in the file
+4. deletes the attachments and e-cards they added (a file another person's campaign also uses is
+   kept)
 
-Chats and contacts on your phone are not touched. If an account was offline, WhatsApp can't
-confirm the unlink: the result screen says so, and you can remove it on the phone under
-*Settings → Linked devices*. Container logs (`docker logs`) are not part of the app's data.
+Server settings such as quiet hours are not touched. Chats and contacts on the phone are not
+touched. If the account was offline, WhatsApp can't confirm the unlink: the result screen says so,
+and it can be removed on the phone under *Settings → Linked devices*. Container logs
+(`docker logs`) are not part of the app's data.
 
 ## How it works
 

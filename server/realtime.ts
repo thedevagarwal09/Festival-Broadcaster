@@ -20,15 +20,6 @@ export function emitToSession<E extends keyof ServerToClientEvents>(
   room.emit(event, payload);
 }
 
-/** Emit an event to every connected browser tab. */
-export function emitToAll<E extends keyof ServerToClientEvents>(
-  event: E,
-  payload: Parameters<ServerToClientEvents[E]>[0],
-): void {
-  if (!io) return;
-  (io as unknown as { emit: (ev: string, data: unknown) => boolean }).emit(event, payload);
-}
-
 /** Number of browser sockets currently watching a session. */
 export function sessionWatcherCount(sessionId: string): number {
   return io?.sockets.adapter.rooms.get(sessionId)?.size ?? 0;

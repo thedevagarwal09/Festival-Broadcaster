@@ -59,10 +59,12 @@ class MediaUploadCache implements CacheStore {
 
 const caches = new Map<string, MediaUploadCache>();
 
-/** Forget every cached upload (used by Erase all). */
-export function clearAllMediaCaches(): void {
-  for (const cache of caches.values()) cache.flushAll();
-  caches.clear();
+/** Forget these accounts' cached uploads (used by Erase my data). */
+export function clearMediaCachesFor(sessionIds: Iterable<string>): void {
+  for (const id of sessionIds) {
+    caches.get(id)?.flushAll();
+    caches.delete(id);
+  }
 }
 
 /** One cache per WhatsApp account, kept across reconnects. */

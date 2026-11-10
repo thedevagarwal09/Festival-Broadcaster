@@ -3,6 +3,18 @@
 import { isValidSessionId } from './types';
 
 const STORAGE_KEY = 'festival-broadcaster.sessionId';
+/** Earlier session ids of this browser (a new one is issued after every unlink), for Erase my data. */
+const PAST_KEY = 'festival-broadcaster.pastSessionIds';
+const MAX_PAST = 20;
+
+function readPast(): string[] {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(PAST_KEY) ?? '[]') as unknown;
+    return Array.isArray(raw) ? raw.filter(isValidSessionId) : [];
+  } catch {
+    return [];
+  }
+}
 
 function generateId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -36,10 +48,16 @@ export function getOrCreateSessionId(): string {
   return id;
 }
 
-/** Forget this browser's session id (after Erase all), so the next load starts fresh. */
+/** Every session id this browser has used, current one first (what "Erase my data" erases). */
+export function browserSessionIds(current: string): string[] {
+  return [...new Set([current, ...readPast()])].slice(0, MAX_PAST + 1);
+}
+
+/** Forget this browser's session ids (after Erase my data), so the next load starts fresh. */
 export function forgetSessionId(): void {
   try {
     window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(PAST_KEY);
   } catch {
     // ignore
   }
@@ -47,6 +65,15 @@ export function forgetSessionId(): void {
 
 /** Start a fresh, isolated session (used after logging out). */
 export function rotateSessionId(): string {
+  try {
+    const previous = window.localStorage.getItem(STORAGE_KEY);
+    if (isValidSessionId(previous)) {
+      const past = [previous, ...readPast().filter((id) => id !== previous)].slice(0, MAX_PAST);
+      window.localStorage.setItem(PAST_KEY, JSON.stringify(past));
+    }
+  } catch {
+    // storage unavailable
+  }
   const id = generateId();
   store(id);
   return id;

@@ -93,8 +93,9 @@ const base = (sessionId: string): string => `/api/sessions/${encodeURIComponent(
 export const api = {
   status: (sessionId: string) => request<SessionSnapshot>(`${base(sessionId)}/status`),
   logout: (sessionId: string) => request<{ ok: true }>(`${base(sessionId)}/logout`, { method: 'POST' }),
-  /** Unlink every account and delete all data on the server. */
-  eraseAll: () => request<EraseResult>('/api/erase-all', json('POST', { confirm: 'ERASE' })),
+  /** Unlink and delete this person's data (only theirs) from the server. */
+  eraseMyData: (sessionIds: string[]) =>
+    request<EraseResult>('/api/erase-my-data', json('POST', { confirm: 'ERASE', sessionIds })),
 
   contacts: (sessionId: string) => request<ContactDTO[]>(`${base(sessionId)}/contacts`),
   contactSyncState: (sessionId: string) => request<ContactSyncState>(`${base(sessionId)}/contacts/sync`),

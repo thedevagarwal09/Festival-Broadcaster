@@ -22,7 +22,7 @@ export function WhatsAppApp() {
   const [eraseOpen, setEraseOpen] = useState(false);
   const [erased, setErased] = useState<EraseResult | null>(null);
 
-  /** Everything on the server is gone: drop this browser's session id and show the result. */
+  /** This person's data is gone: drop this browser's session ids and show the result. */
   const handleErased = useCallback((result: EraseResult) => {
     forgetSessionId();
     // Stop following any session, so this tab doesn't start a new QR behind the result screen.
@@ -35,12 +35,12 @@ export function WhatsAppApp() {
   const openErase = useCallback(() => setEraseOpen(true), []);
   const closeErase = useCallback(() => setEraseOpen(false), []);
 
-  // Another tab (or this one) erased the server.
+  // Another tab of this person (or this one) erased their data.
   useEffect(() => {
     const socket = getSocket();
-    socket.on('server_erased', handleErased);
+    socket.on('data_erased', handleErased);
     return () => {
-      socket.off('server_erased', handleErased);
+      socket.off('data_erased', handleErased);
     };
   }, [handleErased]);
 
@@ -139,10 +139,10 @@ export function WhatsAppApp() {
         <ThemeToggle className="absolute right-4 top-4 md:right-6 md:top-6" />
         <div className="card flex max-w-md flex-col items-center gap-3 p-8">
           <CheckCircle2 className="h-10 w-10 text-emerald-600" />
-          <h1 className="text-xl font-bold text-stone-900">All data erased</h1>
+          <h1 className="text-xl font-bold text-stone-900">Your data has been erased</h1>
           <p className="text-sm text-stone-600">
-            Contacts, groups, campaigns, drafts, settings, uploads and WhatsApp login keys have been deleted from
-            this server.
+            Your contacts, groups, campaigns, draft, uploads and WhatsApp login keys have been deleted from this
+            server.
             {erased.unlinked > 0 &&
               ` WhatsApp confirmed the unlink of ${erased.unlinked} account${erased.unlinked === 1 ? '' : 's'}.`}
           </p>
@@ -203,7 +203,7 @@ export function WhatsAppApp() {
           onEraseAll={openErase}
         />
       )}
-      <EraseDataDialog open={eraseOpen} onClose={closeErase} onErased={handleErased} />
+      <EraseDataDialog open={eraseOpen} sessionId={sessionId} onClose={closeErase} onErased={handleErased} />
     </>
   );
 }

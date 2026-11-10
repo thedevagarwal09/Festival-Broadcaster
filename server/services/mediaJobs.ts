@@ -15,9 +15,20 @@ const jobs = new Map<string, MediaJob>();
 /** Video transcodes are CPU-heavy: run them one at a time. Images run immediately. */
 let videoQueue: Promise<unknown> = Promise.resolve();
 
-/** Forget all compression jobs (used by Erase all). */
-export function clearMediaJobs(): void {
-  jobs.clear();
+/** Forget these sessions' compression jobs (used by Erase my data). */
+export function clearMediaJobsFor(sessionIds: ReadonlySet<string>): void {
+  for (const [id, job] of jobs) if (sessionIds.has(job.sessionId)) jobs.delete(id);
+}
+
+/** Session that uploaded or created a media file, from its sidecar (null for older files). */
+export async function readMediaOwner(file: string): Promise<string | null> {
+  if (!isMediaFileName(file)) return null;
+  try {
+    const raw = JSON.parse(await fs.readFile(sidecarPath(file), 'utf8')) as { owner?: unknown };
+    return typeof raw.owner === 'string' ? raw.owner : null;
+  } catch {
+    return null;
+  }
 }
 
 export function isMediaFileName(file: unknown): file is string {
@@ -35,7 +46,10 @@ export async function readMediaInfo(file: unknown): Promise<MediaInfo | null> {
   if (!isMediaFileName(file)) return null;
   try {
     await fs.access(mediaFilePath(file));
-    return JSON.parse(await fs.readFile(sidecarPath(file), 'utf8')) as MediaInfo;
+    const { owner: _owner, ...info } = JSON.parse(await fs.readFile(sidecarPath(file), 'utf8')) as MediaInfo & {
+      owner?: string;
+    };
+    return info;
   } catch {
     return null;
   }
@@ -97,7 +111,8 @@ export function startMediaJob(params: {
           publish();
         },
       });
-      await fs.writeFile(sidecarPath(result.file), JSON.stringify(result));
+      // owner: lets Erase my data find this file. It is never sent to the browser.
+      await fs.writeFile(sidecarPath(result.file), JSON.stringify({ ...result, owner: params.sessionId }));
       job.status = 'ready';
       job.progress = 100;
       job.stage = 'Ready';
