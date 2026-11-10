@@ -101,8 +101,8 @@ Then open <http://localhost:3000>:
    or a different browser never loses it.
 5. **Send now or schedule.** Choose *Start right away* or *Schedule for later*, for example Diwali at
    07:00. The server starts it on its own, so the browser can be closed.
-6. **Watch it run.** *Live Dispatch* shows the completion bar, Total targets / Dispatched / Delivered /
-   Read / Failed, a time-left estimate and the live log, with Pause, Resume and Abort.
+6. **Watch it run.** *Live Dispatch* shows the completion bar, Total targets / Dispatched /
+   Failed, a time-left estimate and the live log, with Pause, Resume and Abort.
 
 For a production build, run:
 
@@ -255,10 +255,7 @@ PAUSED = paused by you (or WhatsApp unlinked); never resumed automatically.
 
 ## Analytics
 
-Delivered and Read come from WhatsApp receipts (`messages.update`: status 3 = delivered,
-4 = read). Read only counts recipients who share read receipts, so treat it as a minimum. Each
-queue item stores its WhatsApp message id. Receipts that arrive before the send is recorded are
-held briefly and applied afterwards. Time left uses the campaign's real average gap between
+The dashboard shows Total targets, Dispatched and Failed. Time left uses the campaign's real average gap between
 messages (jitter and cooldowns included), falling back to the pacing settings until two messages
 have gone out.
 
