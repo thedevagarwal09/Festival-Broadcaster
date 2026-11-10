@@ -259,6 +259,21 @@ The dashboard shows Total targets, Dispatched and Failed. Time left uses the cam
 messages (jitter and cooldowns included), falling back to the pacing settings until two messages
 have gone out.
 
+## Unlink and erase all data
+
+**Erase all data** (in the dashboard header, and under the QR code when nothing is linked)
+leaves the server as if it had just been installed. You must type `ERASE` to confirm. It then:
+
+1. stops sending (the message in flight finishes first)
+2. unlinks every WhatsApp account and deletes its login keys
+3. deletes all contacts, groups, campaigns, logs, drafts and settings, then compacts the database
+   so the deleted rows don't linger in the file
+4. deletes every uploaded, compressed and e-card file
+
+Chats and contacts on your phone are not touched. If an account was offline, WhatsApp can't
+confirm the unlink: the result screen says so, and you can remove it on the phone under
+*Settings → Linked devices*. Container logs (`docker logs`) are not part of the app's data.
+
 ## How it works
 
 ### Session handling (Module A)

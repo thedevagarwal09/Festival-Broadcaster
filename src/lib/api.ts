@@ -4,6 +4,7 @@ import type {
   ContactDTO,
   ContactSyncState,
   DraftDTO,
+  EraseResult,
   GroupDTO,
   MediaInfo,
   MediaJob,
@@ -92,6 +93,8 @@ const base = (sessionId: string): string => `/api/sessions/${encodeURIComponent(
 export const api = {
   status: (sessionId: string) => request<SessionSnapshot>(`${base(sessionId)}/status`),
   logout: (sessionId: string) => request<{ ok: true }>(`${base(sessionId)}/logout`, { method: 'POST' }),
+  /** Unlink every account and delete all data on the server. */
+  eraseAll: () => request<EraseResult>('/api/erase-all', json('POST', { confirm: 'ERASE' })),
 
   contacts: (sessionId: string) => request<ContactDTO[]>(`${base(sessionId)}/contacts`),
   contactSyncState: (sessionId: string) => request<ContactSyncState>(`${base(sessionId)}/contacts/sync`),

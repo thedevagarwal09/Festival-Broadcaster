@@ -1,14 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { CheckCircle2, Loader2 } from 'lucide-react';
 import { Dashboard } from './Dashboard';
+import { EraseDataDialog } from './EraseDataDialog';
 import { QrLogin } from './QrLogin';
 import { ThemeToggle } from './ThemeToggle';
 import { api } from '@/lib/api';
-import { getOrCreateSessionId, rotateSessionId } from '@/lib/session-id';
+import { forgetSessionId, getOrCreateSessionId, rotateSessionId } from '@/lib/session-id';
 import { getSocket } from '@/lib/socket';
-import type { SessionSnapshot, SessionUser } from '@/lib/types';
+import type { EraseResult, SessionSnapshot, SessionUser } from '@/lib/types';
 
 export function WhatsAppApp() {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -18,6 +19,30 @@ export function WhatsAppApp() {
   const [error, setError] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
   const [slowConnect, setSlowConnect] = useState(false);
+  const [eraseOpen, setEraseOpen] = useState(false);
+  const [erased, setErased] = useState<EraseResult | null>(null);
+
+  /** Everything on the server is gone: drop this browser's session id and show the result. */
+  const handleErased = useCallback((result: EraseResult) => {
+    forgetSessionId();
+    // Stop following any session, so this tab doesn't start a new QR behind the result screen.
+    sessionRef.current = null;
+    setSessionId(null);
+    setSnapshot(null);
+    setEraseOpen(false);
+    setErased(result);
+  }, []);
+  const openErase = useCallback(() => setEraseOpen(true), []);
+  const closeErase = useCallback(() => setEraseOpen(false), []);
+
+  // Another tab (or this one) erased the server.
+  useEffect(() => {
+    const socket = getSocket();
+    socket.on('server_erased', handleErased);
+    return () => {
+      socket.off('server_erased', handleErased);
+    };
+  }, [handleErased]);
 
   // If the live connection hasn't come up after 10 s, show a troubleshooting hint.
   useEffect(() => {
@@ -108,6 +133,34 @@ export function WhatsAppApp() {
     rotateFrom(sessionId); // no-op if the socket event already rotated us
   }, [sessionId, rotateFrom]);
 
+  if (erased) {
+    return (
+      <main className="relative flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+        <ThemeToggle className="absolute right-4 top-4 md:right-6 md:top-6" />
+        <div className="card flex max-w-md flex-col items-center gap-3 p-8">
+          <CheckCircle2 className="h-10 w-10 text-emerald-600" />
+          <h1 className="text-xl font-bold text-stone-900">All data erased</h1>
+          <p className="text-sm text-stone-600">
+            Contacts, groups, campaigns, drafts, settings, uploads and WhatsApp login keys have been deleted from
+            this server.
+            {erased.unlinked > 0 &&
+              ` WhatsApp confirmed the unlink of ${erased.unlinked} account${erased.unlinked === 1 ? '' : 's'}.`}
+          </p>
+          {erased.notConfirmed > 0 && (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              WhatsApp didn&apos;t confirm the unlink of {erased.notConfirmed} account
+              {erased.notConfirmed === 1 ? '' : 's'} (it was offline). The server can no longer use it, but to be sure,
+              open WhatsApp on that phone → Settings → Linked devices and log out the &ldquo;Desktop&rdquo; device.
+            </p>
+          )}
+          <button type="button" className="btn-primary mt-2" onClick={() => window.location.reload()}>
+            Start fresh
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   if (!sessionId || !snapshot) {
     return (
       <main className="relative flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
@@ -129,21 +182,28 @@ export function WhatsAppApp() {
 
   const showDashboard = snapshot.user !== null && snapshot.status !== 'qr' && snapshot.status !== 'logged_out';
 
-  return showDashboard ? (
-    <Dashboard
-      sessionId={sessionId}
-      snapshot={snapshot}
-      socketConnected={socketConnected}
-      onLogout={logout}
-      onReconnect={refresh}
-    />
-  ) : (
-    <QrLogin
-      snapshot={snapshot}
-      qr={qr}
-      socketConnected={socketConnected}
-      error={error}
-      onRefresh={refresh}
-    />
+  return (
+    <>
+      {showDashboard ? (
+        <Dashboard
+          sessionId={sessionId}
+          snapshot={snapshot}
+          socketConnected={socketConnected}
+          onLogout={logout}
+          onReconnect={refresh}
+          onEraseAll={openErase}
+        />
+      ) : (
+        <QrLogin
+          snapshot={snapshot}
+          qr={qr}
+          socketConnected={socketConnected}
+          error={error}
+          onRefresh={refresh}
+          onEraseAll={openErase}
+        />
+      )}
+      <EraseDataDialog open={eraseOpen} onClose={closeErase} onErased={handleErased} />
+    </>
   );
 }

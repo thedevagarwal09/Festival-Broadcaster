@@ -38,6 +38,7 @@ import type { SessionManager } from '../whatsapp/session-manager';
 import { estimateDurationMs, isPacingMode } from '../../src/lib/pacing';
 import { getOccasion, isOccasionId } from '../../src/lib/occasions';
 import { createECard } from '../services/ecard';
+import { eraseEverything } from '../services/eraseAll';
 import { validateTemplate } from '../../src/lib/spintax';
 import {
   isValidSessionId,
@@ -138,6 +139,18 @@ export function createApiRouter(deps: {
     ah(async (req, res) => {
       await sessions.logout(req.params.sessionId);
       res.json({ ok: true });
+    }),
+  );
+
+  // Unlink every WhatsApp account and delete ALL data on this server. The body must say ERASE so
+  // a stray or replayed request can't trigger it.
+  router.post(
+    '/erase-all',
+    ah(async (req, res) => {
+      if ((req.body as { confirm?: unknown } | undefined)?.confirm !== 'ERASE') {
+        throw new HttpError(400, 'Type ERASE to confirm.');
+      }
+      res.json(await eraseEverything(sessions, dispatcher));
     }),
   );
 

@@ -38,6 +38,8 @@ const MAX_RECONNECT_DELAY_MS = 30_000;
 const CONTACT_CHUNK_SIZE = 200;
 /** Short pause after connecting so the socket finishes its own start-up queries first. */
 const ADDRESS_BOOK_SYNC_DELAY_MS = 2_000;
+const LOGOUT_TIMEOUT_MS = 10_000;
+const ERASING_MESSAGE = 'The server is erasing all data. Reload the page in a moment.';
 /**
  * Contacts are stored in the database, so a reconnect does NOT re-sync them if the last sync is
  * recent. New or edited contacts still arrive instantly: WhatsApp pushes a `server_sync`
@@ -85,6 +87,8 @@ export class SessionManager {
   private readonly addressBookSyncs = new Map<string, Promise<ContactSyncState>>();
   private versionPromise: Promise<WAVersion | undefined> | null = null;
   private shuttingDown = false;
+  /** True while "Erase all data" runs: no session may start until it finishes. */
+  private erasing = false;
 
   onConnected(listener: SessionListener): void {
     this.connectedListeners.push(listener);
@@ -119,6 +123,7 @@ export class SessionManager {
   /** Called whenever a browser subscribes to a session. Opens a socket if none is active. */
   async ensureSession(sessionId: string): Promise<SessionSnapshot> {
     if (!isValidSessionId(sessionId)) throw new Error('Invalid session id');
+    if (this.erasing) throw new Error(ERASING_MESSAGE);
     const s = this.getOrCreate(sessionId);
     if (!s.sock && !s.starting) {
       this.clearReconnectTimer(s);
@@ -130,6 +135,7 @@ export class SessionManager {
   /** Force a brand-new socket — used by the "Generate new QR" and "Reconnect" buttons. */
   async refresh(sessionId: string): Promise<SessionSnapshot> {
     if (!isValidSessionId(sessionId)) throw new Error('Invalid session id');
+    if (this.erasing) throw new Error(ERASING_MESSAGE);
     const s = this.getOrCreate(sessionId);
     if (s.status === 'connected' || s.starting) return this.snapshot(sessionId);
     this.clearReconnectTimer(s);
@@ -139,20 +145,32 @@ export class SessionManager {
     return this.snapshot(sessionId);
   }
 
-  async logout(sessionId: string): Promise<void> {
+  /**
+   * Unlink from WhatsApp and delete the login keys. Resolves true when WhatsApp confirmed the
+   * unlink (the device disappears from the phone's Linked devices list).
+   */
+  async logout(sessionId: string): Promise<boolean> {
     if (!isValidSessionId(sessionId)) throw new Error('Invalid session id');
     const s = this.sessions.get(sessionId);
     if (!s) {
       await this.wipeAuth(sessionId);
-      return;
+      return false;
     }
     s.stopped = true;
     this.clearReconnectTimer(s);
     const sock = s.sock;
     s.sock = null;
+    let confirmed = false;
     if (sock) {
       try {
-        await sock.logout();
+        // Don't hang on a dead connection: the keys are deleted below either way.
+        await Promise.race([
+          sock.logout(),
+          sleep(LOGOUT_TIMEOUT_MS).then(() => {
+            throw new Error('WhatsApp did not answer in time');
+          }),
+        ]);
+        confirmed = true;
       } catch (err) {
         console.warn(`[session:${sessionId}] logout request failed:`, errorMessage(err));
       }
@@ -163,6 +181,46 @@ export class SessionManager {
       }
     }
     await this.handleLoggedOut(s, 'Logged out by user');
+    return confirmed;
+  }
+
+  /**
+   * "Erase all data", step 1: unlink every account from WhatsApp and delete every login key on
+   * disk. New sessions are refused until `finishErase()` so nothing is recreated mid-erase.
+   */
+  async unlinkAllForErase(): Promise<{ unlinked: number; notConfirmed: number }> {
+    this.erasing = true;
+    let unlinked = 0;
+    let notConfirmed = 0;
+    for (const s of [...this.sessions.values()]) {
+      const wasPaired = s.user !== null;
+      const confirmed = await this.logout(s.id).catch(() => false);
+      if (!wasPaired) continue; // a QR code nobody scanned: nothing to unlink
+      if (confirmed) unlinked += 1;
+      else notConfirmed += 1;
+    }
+    // Paired accounts on disk that never came back online can't be told to unlink.
+    const entries = await fs.readdir(SESSIONS_DIR, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const creds = JSON.parse(await fs.readFile(path.join(SESSIONS_DIR, entry.name, 'creds.json'), 'utf8')) as {
+          me?: { id?: string };
+        };
+        if (creds.me?.id) notConfirmed += 1;
+      } catch {
+        // not a paired session
+      }
+    }
+    await Promise.allSettled([...this.contactSyncChains.values(), ...this.addressBookSyncs.values()]);
+    for (const entry of entries) {
+      await fs.rm(path.join(SESSIONS_DIR, entry.name), { recursive: true, force: true });
+    }
+    return { unlinked, notConfirmed };
+  }
+
+  finishErase(): void {
+    this.erasing = false;
   }
 
   /** Reconnect every previously paired session on boot so queued campaigns resume. */

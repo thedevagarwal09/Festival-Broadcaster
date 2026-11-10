@@ -36,6 +36,15 @@ export function getOrCreateSessionId(): string {
   return id;
 }
 
+/** Forget this browser's session id (after Erase all), so the next load starts fresh. */
+export function forgetSessionId(): void {
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 /** Start a fresh, isolated session (used after logging out). */
 export function rotateSessionId(): string {
   const id = generateId();

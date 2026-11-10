@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, LogOut, RefreshCw, Send, Terminal, Users, Wifi, WifiOff } from 'lucide-react';
+import { Loader2, LogOut, RefreshCw, Send, Terminal, Trash2, Users, Wifi, WifiOff } from 'lucide-react';
 import { BroadcastComposer } from './BroadcastComposer';
 import { describeDaysAway, upcomingOccasions, type UpcomingOccasion } from '@/lib/occasions';
 import { ThemeToggle } from './ThemeToggle';
@@ -18,6 +18,8 @@ interface DashboardProps {
   snapshot: SessionSnapshot;
   socketConnected: boolean;
   onLogout: () => Promise<void>;
+  /** Opens the "Unlink & erase all data" confirmation. */
+  onEraseAll: () => void;
   onReconnect: () => void;
 }
 
@@ -37,7 +39,7 @@ const STATUS_LABEL: Record<SessionSnapshot['status'], string> = {
   logged_out: 'Logged out',
 };
 
-export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onReconnect }: DashboardProps) {
+export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onReconnect, onEraseAll }: DashboardProps) {
   const [tab, setTab] = useState<Tab>('contacts');
   const [occasionRequest, setOccasionRequest] = useState<{ id: string; nonce: number } | null>(null);
   // Nearest festival within the next two months, suggested at the top of the dashboard.
@@ -193,6 +195,16 @@ export function Dashboard({ sessionId, snapshot, socketConnected, onLogout, onRe
           >
             {loggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
             Unlink
+          </button>
+          <button
+            type="button"
+            className="btn-secondary text-rose-600 hover:bg-rose-50"
+            onClick={onEraseAll}
+            disabled={loggingOut}
+            title="Unlink WhatsApp and delete all contacts, groups, campaigns and uploads from this server"
+          >
+            <Trash2 className="h-4 w-4" />
+            Erase all data
           </button>
         </div>
       </header>

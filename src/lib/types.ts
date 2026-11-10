@@ -179,6 +179,16 @@ export interface ServerToClientEvents {
   campaign_progress: (payload: CampaignDTO) => void;
   campaign_log: (payload: CampaignLogEntry) => void;
   media_job: (payload: MediaJob) => void;
+  /** Everything on the server was erased; every open tab starts over. */
+  server_erased: (payload: EraseResult) => void;
+}
+
+export interface EraseResult {
+  /** Accounts WhatsApp confirmed as unlinked. */
+  unlinked: number;
+  /** Paired accounts whose unlink WhatsApp didn't confirm (offline); remove them on the phone. */
+  notConfirmed: number;
+  erasedAt: string;
 }
 
 export interface ClientToServerEvents {

@@ -44,6 +44,8 @@ export class Dispatcher {
   private readonly earlyReceipts = new Map<string, { status: number; at: number }>();
   private readonly progressTimers = new Map<string, NodeJS.Timeout>();
   private stopped = false;
+  /** Set while "Erase all data" runs. */
+  private halted = false;
 
   constructor(private readonly sessions: SessionManager) {}
 
@@ -68,7 +70,7 @@ export class Dispatcher {
 
   /** Start the session's worker if it isn't already running. Safe to call any time. */
   kick(sessionId: string): void {
-    if (this.stopped || this.workers.has(sessionId)) return;
+    if (this.stopped || this.halted || this.workers.has(sessionId)) return;
     const worker = this.run(sessionId)
       .catch(async (err: unknown) => {
         console.error(`[dispatcher:${sessionId}] worker crashed:`, err);
@@ -88,6 +90,22 @@ export class Dispatcher {
 
   stop(): void {
     this.stopped = true;
+  }
+
+  /** Stop every worker after its current message and forget in-memory state (used by Erase all). */
+  async halt(): Promise<void> {
+    this.halted = true;
+    await Promise.race([Promise.allSettled([...this.workers.values()]), sleep(30_000)]);
+    for (const timer of this.progressTimers.values()) clearTimeout(timer);
+    this.progressTimers.clear();
+    this.nextAllowedAt.clear();
+    this.paceState.clear();
+    this.waitingForConnection.clear();
+    this.earlyReceipts.clear();
+  }
+
+  release(): void {
+    this.halted = false;
   }
 
   /** Manual pause. Also stops a quiet-hours pause from auto-resuming. */
@@ -280,13 +298,13 @@ export class Dispatcher {
   // ---------------------------------------------------------------------------
 
   private async hasRunnableWork(sessionId: string): Promise<boolean> {
-    if (this.stopped) return false;
+    if (this.stopped || this.halted) return false;
     const count = await prisma.broadcastCampaign.count({ where: { sessionId, status: 'PROCESSING' } });
     return count > 0;
   }
 
   private async run(sessionId: string): Promise<void> {
-    while (!this.stopped) {
+    while (!this.stopped && !this.halted) {
       // Oldest running campaign first; campaigns for one account never run in parallel.
       const campaign = await prisma.broadcastCampaign.findFirst({
         where: { sessionId, status: 'PROCESSING' },

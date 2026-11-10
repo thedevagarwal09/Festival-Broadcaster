@@ -15,6 +15,11 @@ const jobs = new Map<string, MediaJob>();
 /** Video transcodes are CPU-heavy: run them one at a time. Images run immediately. */
 let videoQueue: Promise<unknown> = Promise.resolve();
 
+/** Forget all compression jobs (used by Erase all). */
+export function clearMediaJobs(): void {
+  jobs.clear();
+}
+
 export function isMediaFileName(file: unknown): file is string {
   return typeof file === 'string' && MEDIA_FILE_RE.test(file);
 }

@@ -1,7 +1,7 @@
 'use client';
 
 /* eslint-disable @next/next/no-img-element */
-import { Loader2, QrCode, RefreshCw, ShieldCheck, Smartphone, WifiOff } from 'lucide-react';
+import { Loader2, QrCode, RefreshCw, ShieldCheck, Smartphone, Trash2, WifiOff } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import type { SessionSnapshot } from '@/lib/types';
 
@@ -11,6 +11,8 @@ interface QrLoginProps {
   socketConnected: boolean;
   error: string | null;
   onRefresh: () => void;
+  /** Opens the "Unlink & erase all data" confirmation. */
+  onEraseAll: () => void;
 }
 
 const STEPS = [
@@ -19,7 +21,7 @@ const STEPS = [
   'Tap “Link a device” and point your camera at this code',
 ];
 
-export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh }: QrLoginProps) {
+export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh, onEraseAll }: QrLoginProps) {
   const expired = snapshot.status === 'idle' || snapshot.status === 'conflict';
   const waiting = !qr && !expired;
 
@@ -99,6 +101,14 @@ export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh }: QrL
             </p>
           )}
           {error && <p className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</p>}
+          <button
+            type="button"
+            className="btn-ghost text-xs text-stone-500 hover:text-rose-600"
+            onClick={onEraseAll}
+            title="Delete all contacts, groups, campaigns, uploads and WhatsApp logins stored on this server"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Erase all data on this server
+          </button>
         </section>
       </div>
     </main>
