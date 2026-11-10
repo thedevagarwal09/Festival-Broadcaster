@@ -141,7 +141,7 @@ export function WhatsAppApp() {
           <CheckCircle2 className="h-10 w-10 text-emerald-600" />
           <h1 className="text-xl font-bold text-stone-900">Your data has been erased</h1>
           <p className="text-sm text-stone-600">
-            Your contacts, groups, campaigns, draft, uploads and WhatsApp login keys have been deleted from this
+            Your contacts, groups, campaigns, draft, settings, uploads and WhatsApp login keys have been deleted from this
             server.
             {erased.unlinked > 0 &&
               ` WhatsApp confirmed the unlink of ${erased.unlinked} account${erased.unlinked === 1 ? '' : 's'}.`}

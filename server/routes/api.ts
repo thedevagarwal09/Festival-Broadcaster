@@ -390,7 +390,7 @@ export function createApiRouter(deps: {
       const recipients = [...new Map(group.contacts.map((c) => [c.jid, c])).values()];
       if (recipients.length === 0) throw new HttpError(400, 'That group has no contacts.');
 
-      const quiet = await isQuietNow();
+      const quiet = await isQuietNow(sessionId);
       const status = scheduledAt ? 'SCHEDULED' : quiet ? 'QUIET_HOURS_PAUSED' : 'PROCESSING';
       const startMs = (scheduledAt ?? new Date()).getTime();
       const name =
@@ -434,7 +434,7 @@ export function createApiRouter(deps: {
       const when = scheduledAt
         ? `Scheduled for ${scheduledAt.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} (${serverTimeZone()}).`
         : quiet
-          ? `It's quiet hours (${await describeQuietHours()}), so sending starts at ${await quietHoursEnd()}.`
+          ? `It's quiet hours (${await describeQuietHours(sessionId)}), so sending starts at ${await quietHoursEnd(sessionId)}.`
           : 'Sending now.';
       dispatcher.log(sessionId, campaign.id, quiet && !scheduledAt ? 'warn' : 'info', `Campaign queued for ${recipients.length} recipient(s) in "${group.name}". ${when}`);
       if (status === 'PROCESSING') dispatcher.kick(sessionId);
@@ -573,19 +573,20 @@ export function createApiRouter(deps: {
 
   // --- Settings ----------------------------------------------------------------
 
+  // Quiet hours are per person: each session reads and changes only its own.
   router.get(
-    '/settings/quiet-hours',
-    ah(async (_req, res) => {
-      res.json(await getQuietHoursSettings());
+    '/sessions/:sessionId/quiet-hours',
+    ah(async (req, res) => {
+      res.json(await getQuietHoursSettings(req.params.sessionId));
     }),
   );
 
   router.put(
-    '/settings/quiet-hours',
+    '/sessions/:sessionId/quiet-hours',
     ah(async (req, res) => {
       let saved;
       try {
-        saved = await saveQuietHours(req.body);
+        saved = await saveQuietHours(req.params.sessionId, req.body);
       } catch (err) {
         throw new HttpError(400, errorMessage(err));
       }

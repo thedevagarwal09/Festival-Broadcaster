@@ -61,7 +61,8 @@ export default function PrivacyPage() {
               <strong>Images, videos and e-cards</strong> you upload or create to attach to a greeting.
             </li>
             <li>
-              <strong>Server settings</strong> such as quiet hours, which aren&apos;t personal data.
+              <strong>Your settings</strong> such as quiet hours. Each person has their own; nobody else can see
+              or change them.
             </li>
           </ul>
         </Section>
@@ -105,7 +106,7 @@ export default function PrivacyPage() {
             </li>
             <li>
               <strong>Erase my data</strong> (dashboard header, or below the QR code) permanently deletes your
-              WhatsApp login, contacts, groups, campaigns, draft and uploads from this server, and rewrites the
+              WhatsApp login, contacts, groups, campaigns, draft, settings and uploads from this server, and rewrites the
               database so deleted entries can&apos;t be recovered. Nobody else&apos;s data is affected, and nobody
               else can erase yours.
             </li>

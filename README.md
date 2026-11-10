@@ -245,8 +245,11 @@ SCHEDULED ──start time reached──▶ PROCESSING ──▶ COMPLETED
 PAUSED = paused by you (or WhatsApp unlinked); never resumed automatically.
 ```
 
-- **Quiet hours** default to **23:00–07:00** in the server's time zone (`TZ`, Asia/Kolkata in Docker).
-  Change them on the Compose screen. Changes apply immediately.
+- **Quiet hours** are **per person**: each linked account has its own, and nobody else can see or
+  change them. They default to **23:00–07:00** in the server's time zone (`TZ`, Asia/Kolkata in
+  Docker); a server that saved a value before quiet hours became per-person keeps it as the default.
+  Change them on the Compose screen. Changes apply immediately. They follow the WhatsApp number
+  when it is unlinked and linked again.
 - The sender also checks quiet hours **right before each message**, so nothing goes out between
   scheduler ticks.
 - A scheduled campaign whose start time falls inside quiet hours waits until they end.
@@ -269,13 +272,12 @@ number linked to them. It then:
 
 1. stops their sending (the message in flight finishes first)
 2. unlinks their WhatsApp and deletes its login keys
-3. deletes their contacts, groups, campaigns, logs and draft, then compacts the database so the
+3. deletes their contacts, groups, campaigns, logs, draft and quiet hours, then compacts the database so the
    deleted rows don't linger in the file
 4. deletes the attachments and e-cards they added (a file another person's campaign also uses is
    kept)
 
-Server settings such as quiet hours are not touched. Chats and contacts on the phone are not
-touched. If the account was offline, WhatsApp can't confirm the unlink: the result screen says so,
+Chats and contacts on the phone are not touched. If the account was offline, WhatsApp can't confirm the unlink: the result screen says so,
 and it can be removed on the phone under *Settings → Linked devices*. Container logs
 (`docker logs`) are not part of the app's data.
 

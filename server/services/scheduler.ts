@@ -40,9 +40,16 @@ export class Scheduler {
     if (this.ticking) return;
     this.ticking = true;
     try {
-      const quiet = await isQuietNow();
-      const window = await describeQuietHours();
-      const resumeAt = await quietHoursEnd();
+      // Each person has their own quiet hours: check them once per session per tick.
+      const quietBySession = new Map<string, boolean>();
+      const isQuiet = async (sessionId: string): Promise<boolean> => {
+        let quiet = quietBySession.get(sessionId);
+        if (quiet === undefined) {
+          quiet = await isQuietNow(sessionId);
+          quietBySession.set(sessionId, quiet);
+        }
+        return quiet;
+      };
 
       // 1. Scheduled campaigns whose start time has arrived.
       const due = await prisma.broadcastCampaign.findMany({
@@ -50,6 +57,7 @@ export class Scheduler {
         select: { id: true, sessionId: true },
       });
       for (const c of due) {
+        const quiet = await isQuiet(c.sessionId);
         const next = quiet ? 'QUIET_HOURS_PAUSED' : 'PROCESSING';
         const res = await prisma.broadcastCampaign.updateMany({
           where: { id: c.id, status: 'SCHEDULED' },
@@ -61,7 +69,7 @@ export class Scheduler {
           c.id,
           quiet ? 'warn' : 'info',
           quiet
-            ? `Start time reached during quiet hours (${window}). Sending will begin at ${resumeAt}.`
+            ? `Start time reached during quiet hours (${await describeQuietHours(c.sessionId)}). Sending will begin at ${await quietHoursEnd(c.sessionId)}.`
             : 'Scheduled start time reached — sending now.',
         );
         await this.dispatcher.emitProgress(c.id);
@@ -69,18 +77,20 @@ export class Scheduler {
       }
 
       // 2. Quiet hours: pause what's sending, or resume what was paused for quiet hours.
-      if (quiet) {
-        const sending = await prisma.broadcastCampaign.findMany({
-          where: { status: 'PROCESSING' },
-          select: { id: true, sessionId: true },
-        });
-        for (const c of sending) await this.dispatcher.pauseForQuietHours(c.sessionId, c.id);
-      } else {
+      const sending = await prisma.broadcastCampaign.findMany({
+        where: { status: 'PROCESSING' },
+        select: { id: true, sessionId: true },
+      });
+      for (const c of sending) {
+        if (await isQuiet(c.sessionId)) await this.dispatcher.pauseForQuietHours(c.sessionId, c.id);
+      }
+      {
         const waiting = await prisma.broadcastCampaign.findMany({
           where: { status: 'QUIET_HOURS_PAUSED' },
           select: { id: true, sessionId: true },
         });
         for (const c of waiting) {
+          if (await isQuiet(c.sessionId)) continue;
           const res = await prisma.broadcastCampaign.updateMany({
             where: { id: c.id, status: 'QUIET_HOURS_PAUSED' },
             data: { status: 'PROCESSING' },

@@ -95,6 +95,16 @@ export async function mergePreviousSessions(
           data: { sessionId },
         });
 
+        // Keep the person's quiet hours if the new session hasn't set its own.
+        const settings = await tx.userSession.findMany({
+          where: { id: { in: [sessionId, oldId] } },
+          select: { id: true, quietHours: true },
+        });
+        const oldQuiet = settings.find((r) => r.id === oldId)?.quietHours;
+        if (oldQuiet && !settings.find((r) => r.id === sessionId)?.quietHours) {
+          await tx.userSession.update({ where: { id: sessionId }, data: { quietHours: oldQuiet } });
+        }
+
         // Remaining rows are duplicates of contacts the current session already has.
         await tx.userSession.delete({ where: { id: oldId } });
 

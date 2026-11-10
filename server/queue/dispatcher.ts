@@ -125,7 +125,7 @@ export class Dispatcher {
 
   /** Resume a paused campaign, or start a scheduled one now. Respects quiet hours. */
   async resume(sessionId: string, campaignId: string): Promise<CampaignDTO | null> {
-    const quiet = await isQuietNow();
+    const quiet = await isQuietNow(sessionId);
     const current = await prisma.broadcastCampaign.findFirst({
       where: { id: campaignId, sessionId },
       select: { status: true },
@@ -141,7 +141,7 @@ export class Dispatcher {
         campaignId,
         quiet ? 'warn' : 'info',
         quiet
-          ? `${verb}, but it's quiet hours (${await describeQuietHours()}). Sending begins at ${await quietHoursEnd()}.`
+          ? `${verb}, but it's quiet hours (${await describeQuietHours(sessionId)}). Sending begins at ${await quietHoursEnd(sessionId)}.`
           : `${verb}. Pacing rules still apply.`,
       );
       if (!quiet) this.kick(sessionId);
@@ -160,7 +160,7 @@ export class Dispatcher {
       sessionId,
       campaignId,
       'warn',
-      `Quiet hours (${await describeQuietHours()}) — paused automatically. Resumes at ${await quietHoursEnd()}.`,
+      `Quiet hours (${await describeQuietHours(sessionId)}) — paused automatically. Resumes at ${await quietHoursEnd(sessionId)}.`,
     );
     await this.emitProgress(campaignId);
   }
@@ -345,7 +345,7 @@ export class Dispatcher {
       }
 
       // Never send during quiet hours, even between scheduler ticks (e.g. at 23:00:30).
-      if (await isQuietNow()) {
+      if (await isQuietNow(sessionId)) {
         await this.pauseForQuietHours(sessionId, campaign.id);
         continue;
       }

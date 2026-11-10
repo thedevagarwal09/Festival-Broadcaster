@@ -26,6 +26,8 @@ model UserSession {
   status      String   @default("INITIALIZING")
   /// Last time the address book was pulled from WhatsApp. Reconnects skip the pull while this is recent.
   contactsSyncedAt DateTime?
+  /// This person's quiet hours as JSON {enabled,start,end}; null = the server default
+  quietHours  String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

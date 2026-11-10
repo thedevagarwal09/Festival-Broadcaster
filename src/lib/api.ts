@@ -136,9 +136,9 @@ export const api = {
   saveDraft: (sessionId: string, draft: DraftInput) =>
     request<{ updatedAt: string }>(`${base(sessionId)}/draft`, json('PUT', draft)),
 
-  quietHours: () => request<QuietHoursSettings>('/api/settings/quiet-hours'),
-  saveQuietHours: (q: Pick<QuietHoursSettings, 'enabled' | 'start' | 'end'>) =>
-    request<QuietHoursSettings>('/api/settings/quiet-hours', json('PUT', q)),
+  quietHours: (sessionId: string) => request<QuietHoursSettings>(`${base(sessionId)}/quiet-hours`),
+  saveQuietHours: (sessionId: string, q: Pick<QuietHoursSettings, 'enabled' | 'start' | 'end'>) =>
+    request<QuietHoursSettings>(`${base(sessionId)}/quiet-hours`, json('PUT', q)),
   controlCampaign: (sessionId: string, campaignId: string, action: 'pause' | 'resume' | 'abort') =>
     request<CampaignDTO>(`${base(sessionId)}/campaigns/${campaignId}/${action}`, { method: 'POST' }),
 };

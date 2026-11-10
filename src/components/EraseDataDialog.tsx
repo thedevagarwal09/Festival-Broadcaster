@@ -81,7 +81,7 @@ export function EraseDataDialog({ open, sessionId, onClose, onErased }: EraseDat
           <li>unlinks your WhatsApp and deletes its login keys</li>
           <li>your saved contacts and groups</li>
           <li>your campaigns, scheduled sends and their logs (running ones stop)</li>
-          <li>your draft, and the images, videos and e-cards you added</li>
+          <li>your draft, your quiet hours, and the images, videos and e-cards you added</li>
         </ul>
         <p className="mt-3 text-sm text-stone-600">
           It cannot be undone. Other people using this server aren&apos;t affected, and the chats and contacts on

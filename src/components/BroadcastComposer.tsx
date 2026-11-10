@@ -198,7 +198,7 @@ export function BroadcastComposer({
         if (!cancelled) setDraftStatus('idle');
       });
     api
-      .quietHours()
+      .quietHours(sessionId)
       .then((q) => {
         if (!cancelled) setQuietHours(q);
       })
@@ -428,7 +428,7 @@ export function BroadcastComposer({
     if (!quietEdit) return;
     setQuietError(null);
     try {
-      setQuietHours(await api.saveQuietHours(quietEdit));
+      setQuietHours(await api.saveQuietHours(sessionId, quietEdit));
       setQuietEdit(null);
     } catch (err) {
       setQuietError(err instanceof Error ? err.message : 'Could not save quiet hours.');
