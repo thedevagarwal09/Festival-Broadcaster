@@ -1,7 +1,8 @@
 'use client';
 
 /* eslint-disable @next/next/no-img-element */
-import { Loader2, QrCode, RefreshCw, ShieldCheck, Smartphone, Trash2, WifiOff } from 'lucide-react';
+import Link from 'next/link';
+import { EyeOff, Loader2, QrCode, RefreshCw, ServerCog, ShieldCheck, Smartphone, Trash2, WifiOff } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import type { SessionSnapshot } from '@/lib/types';
 
@@ -14,6 +15,24 @@ interface QrLoginProps {
   /** Opens the "Unlink & erase all data" confirmation. */
   onEraseAll: () => void;
 }
+
+const PRIVACY_POINTS = [
+  {
+    icon: ServerCog,
+    title: 'Stays on this server',
+    text: 'Your WhatsApp login, contacts and messages are never uploaded to any cloud, sold or shared.',
+  },
+  {
+    icon: EyeOff,
+    title: 'Your chats stay private',
+    text: 'No chat history is ever downloaded. Only contact names and numbers are kept, to build your lists.',
+  },
+  {
+    icon: Trash2,
+    title: 'You stay in control',
+    text: 'Unlink any time from your phone, or erase everything from this server in one click.',
+  },
+] as const;
 
 const STEPS = [
   'Open WhatsApp on your phone',
@@ -50,9 +69,27 @@ export function QrLogin({ snapshot, qr, socketConnected, error, onRefresh, onEra
               </li>
             ))}
           </ol>
-          <p className="mt-10 flex items-center gap-2 text-xs text-diya-100">
-            <ShieldCheck className="h-4 w-4" /> Your WhatsApp login stays on your server.
-          </p>
+          <div className="mt-10 rounded-2xl bg-black/15 p-4">
+            <p className="flex items-center gap-2 text-sm font-semibold">
+              <ShieldCheck className="h-4 w-4" /> Your data is safe with us
+            </p>
+            <ul className="mt-3 space-y-2.5">
+              {PRIVACY_POINTS.map(({ icon: Icon, title, text }) => (
+                <li key={title} className="flex items-start gap-2.5 text-xs leading-relaxed text-diya-50">
+                  <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    <span className="font-semibold text-white">{title}.</span> {text}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <Link
+              href="/privacy"
+              className="mt-3 inline-block text-xs font-semibold text-white underline underline-offset-2 hover:text-diya-100"
+            >
+              Read our privacy policy →
+            </Link>
+          </div>
         </section>
 
         <section className="flex flex-col items-center justify-center gap-5 p-8">
