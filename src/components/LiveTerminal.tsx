@@ -181,8 +181,6 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
   const total = campaign?.totalRecipients ?? 0;
   const sent = campaign?.sentCount ?? 0;
   const failed = campaign?.failedCount ?? 0;
-  const delivered = Math.min(campaign?.deliveredCount ?? 0, sent);
-  const read = Math.min(campaign?.readCount ?? 0, delivered);
   const processed = sent + failed;
   const status = campaign?.status;
   const isOpen = status === 'SCHEDULED' || status === 'PROCESSING' || status === 'PAUSED' || status === 'QUIET_HOURS_PAUSED';
@@ -329,18 +327,14 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
                 aria-valuemax={100}
                 aria-label="Campaign completion"
               >
-                <div className="h-full bg-emerald-700 transition-all duration-500" style={{ width: pct(read) }} title="Read" />
-                <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: pct(delivered - read) }} title="Delivered" />
-                <div className="h-full bg-emerald-300 transition-all duration-500" style={{ width: pct(sent - delivered) }} title="Dispatched" />
+                <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: pct(sent) }} title="Dispatched" />
                 <div className="h-full bg-rose-500 transition-all duration-500" style={{ width: pct(failed) }} title="Failed" />
               </div>
 
-              <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
                 {[
                   { label: 'Total targets', value: total, sub: `${remaining} to go`, tone: 'text-stone-800', dot: 'bg-stone-300' },
-                  { label: 'Dispatched', value: sent, sub: total ? `${Math.round((sent / total) * 100)}% of targets` : '', tone: 'text-emerald-600', dot: 'bg-emerald-300' },
-                  { label: 'Delivered', value: delivered, sub: sent ? `${Math.round((delivered / sent) * 100)}% of dispatched` : '—', tone: 'text-emerald-700', dot: 'bg-emerald-500' },
-                  { label: 'Read', value: read, sub: sent ? `${Math.round((read / sent) * 100)}% of dispatched` : '—', tone: 'text-emerald-800', dot: 'bg-emerald-700' },
+                  { label: 'Dispatched', value: sent, sub: total ? `${Math.round((sent / total) * 100)}% of targets` : '', tone: 'text-emerald-600', dot: 'bg-emerald-500' },
                   { label: 'Failed', value: failed, sub: total ? `${Math.round((failed / total) * 100)}% of targets` : '', tone: 'text-rose-600', dot: 'bg-rose-500' },
                 ].map((m) => (
                   <div key={m.label} className="rounded-xl bg-stone-50 px-3 py-2.5">
@@ -352,9 +346,6 @@ export function LiveTerminal({ sessionId, campaigns, activeId, onSelect, onCampa
                   </div>
                 ))}
               </dl>
-              <p className="mt-2 text-[11px] text-stone-400">
-                Delivered and Read come from WhatsApp receipts. Read only counts people who share read receipts.
-              </p>
             </div>
             {error && <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
           </div>
